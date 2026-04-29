@@ -107,12 +107,15 @@ fi
 cp -R "$TMP_APP" "$INSTALL_DIR/"
 echo "✅  Installed"
 
-# ── 6. Register with Launch Services ──────────────────────────────────────────
+# ── 6. Register with Launch Services + bust icon cache ────────────────────────
 echo ""
 echo "▶ Registering with Launch Services..."
 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister \
   -f "$INSTALL_DIR/$APP_BUNDLE" 2>/dev/null || true
-echo "✅  Registered"
+# Kill Dock to force icon cache refresh (restarts automatically)
+killall Dock 2>/dev/null || true
+sleep 1
+echo "✅  Registered + icon cache cleared"
 
 # ── 7. Launch ─────────────────────────────────────────────────────────────────
 echo ""

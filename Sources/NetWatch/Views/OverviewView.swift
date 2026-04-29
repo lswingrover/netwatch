@@ -2,12 +2,18 @@ import SwiftUI
 import Charts
 
 struct OverviewView: View {
-    @EnvironmentObject var monitor: NetworkMonitorService
-    @EnvironmentObject var ifm: InterfaceMonitor
+    @EnvironmentObject var monitor:       NetworkMonitorService
+    @EnvironmentObject var ifm:           InterfaceMonitor
+    @EnvironmentObject var updateChecker: UpdateChecker
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                // Update banner (shown when a new version is available)
+                if updateChecker.updateAvailable {
+                    UpdateBanner(checker: updateChecker)
+                }
+
                 // Status banner
                 StatusBanner()
 
@@ -357,5 +363,47 @@ struct DNSSummaryRow: View {
     func rttColor(_ rtt: Double?) -> Color {
         guard let r = rtt else { return .secondary }
         return r < 50 ? .green : r < 150 ? .yellow : .red
+    }
+}
+
+// MARK: - Update Banner
+
+struct UpdateBanner: View {
+    @ObservedObject var checker: UpdateChecker
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle.fill")
+                .foregroundStyle(.white)
+                .font(.title2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("NetWatch \(checker.latestVersion) is available")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text("A new version is on GitHub.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            Spacer()
+            if let url = checker.releaseURL {
+                Button("View Release") {
+                    NSWorkspace.shared.open(url)
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+            }
+            Button {
+                checker.updateAvailable = false
+            } label: {
+                Image(systemName: "xmark")
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.accentColor)
+        )
     }
 }

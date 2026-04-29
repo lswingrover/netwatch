@@ -3,7 +3,8 @@ import UserNotifications
 
 @main
 struct NetWatchApp: App {
-    @StateObject private var monitor = NetworkMonitorService()
+    @StateObject private var monitor       = NetworkMonitorService()
+    @StateObject private var updateChecker = UpdateChecker()
 
     var body: some Scene {
         WindowGroup {
@@ -12,12 +13,17 @@ struct NetWatchApp: App {
                 .environmentObject(monitor.interfaceMonitor)
                 .environmentObject(monitor.tracerouteMonitor)
                 .environmentObject(monitor.incidentManager)
+                .environmentObject(updateChecker)
                 .onAppear {
                     monitor.start()
+                    updateChecker.start()
                     UNUserNotificationCenter.current()
                         .requestAuthorization(options: [.alert, .sound]) { _, _ in }
                 }
-                .onDisappear { monitor.stop() }
+                .onDisappear {
+                    monitor.stop()
+                    updateChecker.stop()
+                }
                 .frame(minWidth: 900, minHeight: 600)
         }
         .windowStyle(.titleBar)
@@ -27,7 +33,7 @@ struct NetWatchApp: App {
                 Button("About NetWatch") {
                     NSApp.orderFrontStandardAboutPanel(options: [
                         .applicationName: "NetWatch",
-                        .applicationVersion: "1.0.0",
+                        .applicationVersion: "1.2.0",
                         .credits: NSAttributedString(string: "Network monitoring dashboard.\nBuilt by Louis Swingrover.")
                     ])
                 }

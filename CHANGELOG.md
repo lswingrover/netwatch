@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.2.0] — 2026-04-29
+
+### Added
+- **Auto-update checker** — polls `api.github.com/repos/lswingrover/netwatch/releases/latest` hourly; fires a macOS notification and shows an in-app banner on the Overview tab when a newer version is available; banner includes a direct "View Release" link and a dismiss button
+- **`UpdateChecker.swift`** — `@MainActor ObservableObject` with semver integer comparison, system notification delivery, and hourly `Timer`-based polling
+
+### Changed
+- `NetWatchApp.swift` bumped version string to 1.2.0
+- `build_app.sh` — added `killall Dock` after `lsregister` to force icon cache refresh on reinstall
+- Ping, DNS, and Traceroute target lists are now fully editable inline (add, delete, reorder) in Preferences
+
+---
+
 ## [1.1.0] — 2026-04-29
 
 ### Added

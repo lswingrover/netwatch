@@ -90,15 +90,17 @@ struct TargetsTab: View {
 
             Section("Traceroute Targets") {
                 List {
-                    ForEach(settings.tracerouteTargets, id: \.self) { target in
-                        Text(target).font(.system(.body, design: .monospaced))
+                    ForEach(settings.tracerouteTargets.indices, id: \.self) { idx in
+                        TextField("Host / IP", text: $settings.tracerouteTargets[idx])
+                            .font(.system(.body, design: .monospaced))
                     }
                     .onDelete { settings.tracerouteTargets.remove(atOffsets: $0) }
+                    .onMove  { settings.tracerouteTargets.move(fromOffsets: $0, toOffset: $1) }
                 }
-                .frame(minHeight: 60, maxHeight: 100)
+                .frame(minHeight: 60, maxHeight: 120)
 
                 HStack {
-                    TextField("Add target", text: $newTracerouteTarget)
+                    TextField("Add host / IP", text: $newTracerouteTarget)
                         .onSubmit { addTracerouteTarget() }
                     Button("Add", action: addTracerouteTarget).disabled(newTracerouteTarget.isEmpty)
                 }
