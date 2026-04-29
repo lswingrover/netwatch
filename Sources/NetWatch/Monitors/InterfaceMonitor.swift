@@ -18,12 +18,18 @@ class InterfaceMonitor: ObservableObject {
     @Published var mtu: Int = 0
 
     // Wi-Fi (empty strings when on Ethernet)
-    @Published var wifiSSID:    String = ""
-    @Published var wifiRSSI:    Int    = 0
-    @Published var wifiNoise:   Int    = 0
-    @Published var wifiChannel: String = ""
-    @Published var wifiMCS:     Int    = 0
-    @Published var wifiTxRate:  Int    = 0
+    @Published var wifiSSID:      String = ""
+    @Published var wifiRSSI:      Int    = 0
+    @Published var wifiNoise:     Int    = 0
+    @Published var wifiChannel:   String = ""
+    @Published var wifiMCS:       Int    = 0
+    @Published var wifiTxRate:    Int    = 0
+    @Published var wifiRetryRate: Double = 0   // fraction 0–1, e.g. 0.12 = 12 %
+    var wifiSNR: Int { wifiRSSI - wifiNoise }  // positive dB = better
+
+    // Link flap tracking
+    @Published var interfaceUp: Bool       = true
+    @Published var linkFlaps:   [LinkFlap] = []   // capped at 50
 
     private var prevSnapshot: InterfaceSnapshot? = nil
     private var task: Task<Void, Never>? = nil
@@ -97,6 +103,20 @@ class InterfaceMonitor: ObservableObject {
 
         let output = await ProcessRunner.runPermissive("/usr/bin/netstat", args: ["-ibn"])
         let snapshot = parseNetstat(output, interface: iface)
+
+        // Link flap detection
+        if snapshot == nil && interfaceUp && prevSnapshot != nil {
+            interfaceUp = false
+            let flap = LinkFlap(timestamp: Date(), event: "down")
+            linkFlaps.insert(flap, at: 0)
+            if linkFlaps.count > 50 { linkFlaps.removeLast() }
+        } else if snapshot != nil && !interfaceUp {
+            interfaceUp = true
+            let flap = LinkFlap(timestamp: Date(), event: "up")
+            linkFlaps.insert(flap, at: 0)
+            if linkFlaps.count > 50 { linkFlaps.removeLast() }
+        }
+
         guard let snap = snapshot else { return }
 
         let now = Date()
@@ -218,6 +238,7 @@ class InterfaceMonitor: ObservableObject {
 
         var ssid = "", channel = ""
         var rssi = 0, noise = 0, mcsVal = 0, txRate = 0
+        var retryRatePct = 0.0
 
         for line in out.components(separatedBy: "\n") {
             let parts = line.trimmingCharacters(in: .whitespaces).components(separatedBy: ": ")
@@ -225,23 +246,25 @@ class InterfaceMonitor: ObservableObject {
             let key = parts[0].trimmingCharacters(in: .whitespaces)
             let val = parts[1...].joined(separator: ": ").trimmingCharacters(in: .whitespaces)
             switch key {
-            case "SSID":        ssid    = val
-            case "agrCtlRSSI":  rssi    = Int(val) ?? 0
-            case "agrCtlNoise": noise   = Int(val) ?? 0
-            case "channel":     channel = val.components(separatedBy: ",")[0]  // strip sub-channel
-            case "MCS":         mcsVal  = Int(val) ?? 0
-            case "lastTxRate":  txRate  = Int(val) ?? 0
+            case "SSID":           ssid         = val
+            case "agrCtlRSSI":     rssi         = Int(val) ?? 0
+            case "agrCtlNoise":    noise        = Int(val) ?? 0
+            case "channel":        channel      = val.components(separatedBy: ",")[0]
+            case "MCS":            mcsVal       = Int(val) ?? 0
+            case "lastTxRate":     txRate       = Int(val) ?? 0
+            case "agrCtlRetryRate": retryRatePct = Double(val) ?? 0
             default: break
             }
         }
 
         await MainActor.run {
-            self.wifiSSID    = ssid
-            self.wifiRSSI    = rssi
-            self.wifiNoise   = noise
-            self.wifiChannel = channel
-            self.wifiMCS     = mcsVal
-            self.wifiTxRate  = txRate
+            self.wifiSSID       = ssid
+            self.wifiRSSI       = rssi
+            self.wifiNoise      = noise
+            self.wifiChannel    = channel
+            self.wifiMCS        = mcsVal
+            self.wifiTxRate     = txRate
+            self.wifiRetryRate  = retryRatePct / 100.0
         }
     }
 

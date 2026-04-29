@@ -5,6 +5,8 @@ class TracerouteMonitor: ObservableObject {
     @Published var results: [String: TracerouteResult] = [:]   // target → result
     @Published var currentTarget: String = ""
     @Published var isRunning: Bool = false
+    /// Geo info cache keyed by hop IP address — populated after each trace
+    @Published var geoCache: [String: GeoInfo] = [:]
 
     private var targets: [String] = []
     private var targetIndex: Int = 0
@@ -65,6 +67,46 @@ class TracerouteMonitor: ObservableObject {
             results[target] = result
             isRunning = false
         }
+
+        // Fire geo lookups for new IPs (skip already-cached; skip RFC-1918 / loopback)
+        let knownIPs = await geoCache.keys
+        let newIPs = hops.compactMap(\.ip).filter { ip in
+            !knownIPs.contains(ip) && !isPrivateIP(ip)
+        }
+        // Rate-limit: stagger lookups 200ms apart
+        for ip in newIPs {
+            if Task.isCancelled { break }
+            await lookupGeo(ip: ip)
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
+    private func isPrivateIP(_ ip: String) -> Bool {
+        ip.hasPrefix("10.") || ip.hasPrefix("192.168.") || ip.hasPrefix("127.") ||
+        ip.hasPrefix("172.16.") || ip.hasPrefix("172.17.") || ip.hasPrefix("172.18.") ||
+        ip.hasPrefix("172.19.") || ip.hasPrefix("172.2")   || ip.hasPrefix("172.3") ||
+        ip == "0.0.0.0"
+    }
+
+    private func lookupGeo(ip: String) async {
+        let urlStr = "https://ipapi.co/\(ip)/json/"
+        guard let url = URL(string: urlStr) else { return }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        req.setValue("NetWatch/1.2 (macOS)", forHTTPHeaderField: "User-Agent")
+
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+
+        let org     = json["org"]          as? String ?? ""
+        let city    = json["city"]         as? String ?? ""
+        let country = json["country_name"] as? String ?? ""
+
+        guard !org.isEmpty || !city.isEmpty else { return }
+
+        let geo = GeoInfo(asn: org, city: city, country: country)
+        await MainActor.run { geoCache[ip] = geo }
     }
 
     private func parseTraceroute(_ output: String) -> [TracerouteHop] {

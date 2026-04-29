@@ -43,7 +43,7 @@ struct TracerouteView: View {
 
             // Detail
             if let target = selectedTarget, let result = trMonitor.results[target] {
-                TracerouteDetailView(result: result)
+                TracerouteDetailView(result: result, geoCache: trMonitor.geoCache)
             } else if trMonitor.isRunning {
                 VStack(spacing: 12) {
                     ProgressView()
@@ -65,6 +65,7 @@ struct TracerouteView: View {
 
 struct TracerouteDetailView: View {
     let result: TracerouteResult
+    var geoCache: [String: GeoInfo] = [:]
 
     var body: some View {
         ScrollView {
@@ -99,11 +100,12 @@ struct TracerouteDetailView: View {
                         // header
                         HStack {
                             Text("#").frame(width: 28, alignment: .trailing)
-                            Text("IP / Host").frame(minWidth: 150, alignment: .leading)
-                            Text("RTT 1").frame(width: 80, alignment: .trailing)
-                            Text("RTT 2").frame(width: 80, alignment: .trailing)
-                            Text("RTT 3").frame(width: 80, alignment: .trailing)
-                            Text("Avg").frame(width: 80, alignment: .trailing)
+                            Text("IP / Host").frame(minWidth: 130, alignment: .leading)
+                            Text("RTT 1").frame(width: 70, alignment: .trailing)
+                            Text("RTT 2").frame(width: 70, alignment: .trailing)
+                            Text("RTT 3").frame(width: 70, alignment: .trailing)
+                            Text("Avg").frame(width: 70, alignment: .trailing)
+                            Text("ASN / Location").frame(minWidth: 160, alignment: .leading)
                         }
                         .font(.caption).foregroundStyle(.secondary)
                         .padding(.vertical, 4)
@@ -117,12 +119,30 @@ struct TracerouteDetailView: View {
                                     .foregroundStyle(.secondary)
                                 Text(hop.ip ?? "*")
                                     .font(.system(.body, design: .monospaced))
-                                    .frame(minWidth: 150, alignment: .leading)
+                                    .frame(minWidth: 130, alignment: .leading)
                                     .lineLimit(1)
-                                rttCell(hop.rtt1)
-                                rttCell(hop.rtt2)
-                                rttCell(hop.rtt3)
-                                rttCell(hop.avgRTT)
+                                rttCell(hop.rtt1, width: 70)
+                                rttCell(hop.rtt2, width: 70)
+                                rttCell(hop.rtt3, width: 70)
+                                rttCell(hop.avgRTT, width: 70)
+                                // Geo annotation
+                                if let ip = hop.ip, let geo = geoCache[ip] {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(geo.asnShort)
+                                            .font(.system(.caption2, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                        Text(geo.location)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    .frame(minWidth: 160, alignment: .leading)
+                                } else {
+                                    Text(hop.ip == nil ? "" : "–")
+                                        .frame(minWidth: 160, alignment: .leading)
+                                        .foregroundStyle(.secondary)
+                                        .font(.caption2)
+                                }
                             }
                             .padding(.vertical, 4)
                             Divider().opacity(0.4)
@@ -138,15 +158,15 @@ struct TracerouteDetailView: View {
     }
 
     @ViewBuilder
-    func rttCell(_ rtt: Double?) -> some View {
+    func rttCell(_ rtt: Double?, width: CGFloat = 80) -> some View {
         if let r = rtt {
             Text(String(format: "%.1f ms", r))
-                .frame(width: 80, alignment: .trailing)
+                .frame(width: width, alignment: .trailing)
                 .foregroundStyle(hopColor(r))
                 .font(.system(.callout, design: .monospaced))
         } else {
             Text("*")
-                .frame(width: 80, alignment: .trailing)
+                .frame(width: width, alignment: .trailing)
                 .foregroundStyle(.secondary)
                 .font(.system(.callout, design: .monospaced))
         }

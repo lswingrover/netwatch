@@ -33,7 +33,7 @@ struct NetWatchApp: App {
                 Button("About NetWatch") {
                     NSApp.orderFrontStandardAboutPanel(options: [
                         .applicationName: "NetWatch",
-                        .applicationVersion: "1.2.0",
+                        .applicationVersion: "1.3.0",
                         .credits: NSAttributedString(string: "Network monitoring dashboard.\nBuilt by Louis Swingrover.")
                     ])
                 }

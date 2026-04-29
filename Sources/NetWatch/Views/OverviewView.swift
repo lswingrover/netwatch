@@ -56,6 +56,50 @@ struct OverviewView: View {
                         StatCard(title: "Noise Floor",  value: "\(ifm.wifiNoise) dBm",     icon: "waveform")
                         StatCard(title: "MCS / Tx Rate",value: "MCS\(ifm.wifiMCS)  \(ifm.wifiTxRate) Mbps", icon: "speedometer")
                     }
+                    // Second Wi-Fi row: SNR + retries
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()),
+                                        GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                        StatCard(title: "SNR",
+                                 value: "\(ifm.wifiSNR) dB",
+                                 icon: "waveform.badge.magnifyingglass",
+                                 color: ifm.wifiSNR >= 25 ? .green : ifm.wifiSNR >= 15 ? .yellow : .red)
+                        StatCard(title: "Retry Rate",
+                                 value: String(format: "%.1f%%", ifm.wifiRetryRate * 100),
+                                 icon: "arrow.counterclockwise.circle",
+                                 color: ifm.wifiRetryRate < 0.05 ? .green : ifm.wifiRetryRate < 0.15 ? .yellow : .red)
+                        StatCard(title: "Link Flaps",
+                                 value: "\(ifm.linkFlaps.count)",
+                                 icon: "bolt.trianglebadge.exclamationmark",
+                                 color: ifm.linkFlaps.isEmpty ? .green : .orange)
+                        StatCard(title: "Link State",
+                                 value: ifm.interfaceUp ? "Up" : "Down",
+                                 icon: ifm.interfaceUp ? "checkmark.circle.fill" : "xmark.circle.fill",
+                                 color: ifm.interfaceUp ? .green : .red)
+                    }
+                }
+
+                // Link flap log
+                if !ifm.linkFlaps.isEmpty {
+                    GroupBox("Link Flap Log (last \(ifm.linkFlaps.count))") {
+                        VStack(spacing: 0) {
+                            ForEach(ifm.linkFlaps.prefix(10)) { flap in
+                                HStack {
+                                    Image(systemName: flap.event == "down" ? "xmark.circle.fill" : "checkmark.circle.fill")
+                                        .foregroundStyle(flap.event == "down" ? Color.red : Color.green)
+                                        .font(.caption)
+                                    Text(flap.event == "down" ? "Interface went DOWN" : "Interface came UP")
+                                        .font(.callout)
+                                    Spacer()
+                                    Text(flap.timestamp, style: .relative)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.vertical, 3)
+                                Divider().opacity(0.3)
+                            }
+                        }
+                        .padding(.horizontal, 4)
+                    }
                 }
 
                 // Gateway RTT sparkline

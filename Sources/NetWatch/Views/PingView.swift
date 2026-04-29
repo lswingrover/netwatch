@@ -110,6 +110,21 @@ struct PingDetailView: View {
                              value: "\(state.results.count)",
                              icon: "number")
                 }
+                // Header stats — row 3: percentiles
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
+                    StatCard(title: "p50 (median)",
+                             value: state.p50.rttString,
+                             icon: "chart.line.flattrend.xyaxis",
+                             color: rttColor(state.p50))
+                    StatCard(title: "p95",
+                             value: state.p95.rttString,
+                             icon: "chart.line.uptrend.xyaxis",
+                             color: rttColor(state.p95))
+                    StatCard(title: "p99",
+                             value: state.p99.rttString,
+                             icon: "exclamationmark.arrow.triangle.2.circlepath",
+                             color: rttColor(state.p99))
+                }
 
                 // RTT chart
                 GroupBox("RTT History") {

@@ -5,6 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.3.0] — 2026-04-29
+
+### Added
+- **RTT percentiles** — p50, p95, and p99 computed over all collected samples; displayed as a third stat row in PingDetailView
+- **Multi-resolver DNS comparison** — each DNS query now runs concurrently against System, Cloudflare (1.1.1.1), Google (8.8.8.8), and Quad9 (9.9.9.9); results shown as a proportional bar chart in DNSDetailView
+- **Wi-Fi SNR** — signal-to-noise ratio (RSSI − Noise Floor) displayed in Overview Wi-Fi row; green ≥ 25 dB, yellow ≥ 15 dB, red < 15 dB
+- **Wi-Fi retry rate** — `agrCtlRetryRate` parsed from `airport -I`; high retries indicate RF interference or range issues
+- **Link flap detector** — InterfaceMonitor tracks interface up/down transitions with timestamps; count badge and live log shown in Overview
+- **Traceroute geo enrichment** — after each trace, hop IPs are looked up against `ipapi.co` (HTTPS, free, cached); ASN short code and city/country shown in the hops table
+- **Timeline view** — new sidebar item showing per-target uptime swimlane for the last 15 minutes; green = success, red = failure, dark = no data; covers both ping and DNS targets
+- **`GeoInfo` model** — ASN, city, country; `asnShort` and `location` computed display properties
+- **`LinkFlap` model** — timestamped up/down event with UUID identity
+- **`p50`/`p95`/`p99` on PingState** — percentile computed properties using integer index interpolation
+- **`resolverTimes` on DNSState** — `@Published [String: Double?]` map updated after each multi-resolver query round
+
+### Changed
+- `Info.plist` / `NetWatchApp.swift` bumped to 1.3.0 / build 4
+- TracerouteDetailView now accepts a `geoCache` parameter and renders ASN + location column
+
+---
+
 ## [1.2.0] — 2026-04-29
 
 ### Added

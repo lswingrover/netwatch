@@ -2,6 +2,7 @@ import SwiftUI
 
 enum NavItem: String, CaseIterable, Identifiable {
     case overview   = "Overview"
+    case timeline   = "Timeline"
     case ping       = "Ping Targets"
     case dns        = "DNS"
     case traceroute = "Traceroute"
@@ -12,6 +13,7 @@ enum NavItem: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .overview:   "gauge.with.dots.needle.bottom.50percent"
+        case .timeline:   "timeline.selection"
         case .ping:       "antenna.radiowaves.left.and.right"
         case .dns:        "server.rack"
         case .traceroute: "point.3.connected.trianglepath.dotted"
@@ -43,6 +45,7 @@ struct ContentView: View {
             Group {
                 switch selection {
                 case .overview:   OverviewView()
+                case .timeline:   TimelineView()
                 case .ping:       PingView()
                 case .dns:        DNSView()
                 case .traceroute: TracerouteView()

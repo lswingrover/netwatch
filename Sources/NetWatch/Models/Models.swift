@@ -64,6 +64,19 @@ class PingState: ObservableObject, Identifiable {
 
     /// Recent successful RTTs for sparkline rendering
     var recentRTTs: [Double] { results.suffix(15).compactMap(\.rtt) }
+
+    // MARK: Percentiles (over all collected samples)
+    var p50: Double? { percentile(50) }
+    var p95: Double? { percentile(95) }
+    var p99: Double? { percentile(99) }
+
+    private func percentile(_ p: Int) -> Double? {
+        let sorted = results.compactMap(\.rtt).sorted()
+        guard !sorted.isEmpty else { return nil }
+        let idx = max(0, min(sorted.count - 1,
+                             Int(Double(sorted.count - 1) * Double(p) / 100.0)))
+        return sorted[idx]
+    }
 }
 
 enum Trend { case rising, falling, stable, unknown
@@ -114,6 +127,33 @@ class DNSState: ObservableObject, Identifiable {
     }
 
     var lastStatus: String { results.last?.status ?? "–" }
+
+    /// Per-resolver query time comparison: [resolver label: ms or nil]
+    @Published var resolverTimes: [String: Double?] = [:]
+}
+
+// MARK: - Link Flap
+
+struct LinkFlap: Identifiable {
+    let id   = UUID()
+    let timestamp: Date
+    let event: String   // "down" or "up"
+}
+
+// MARK: - Geo Info (traceroute hop enrichment)
+
+struct GeoInfo {
+    let asn:     String   // e.g. "AS13335 Cloudflare"
+    let city:    String
+    let country: String
+    var asnShort: String {
+        // "AS13335 Cloudflare, Inc." → "AS13335"
+        asn.components(separatedBy: " ").first ?? asn
+    }
+    var location: String {
+        let parts = [city, country].filter { !$0.isEmpty }
+        return parts.isEmpty ? "–" : parts.joined(separator: ", ")
+    }
 }
 
 // MARK: - Interface Stats

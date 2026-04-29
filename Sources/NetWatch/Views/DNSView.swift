@@ -81,6 +81,47 @@ struct DNSDetailView: View {
                     .frame(height: 120)
                 }
 
+                // Multi-resolver comparison
+                if !state.resolverTimes.isEmpty {
+                    GroupBox("Resolver Comparison (last query)") {
+                        VStack(spacing: 0) {
+                            ForEach(["System", "Cloudflare", "Google", "Quad9"], id: \.self) { label in
+                                if let timing = state.resolverTimes[label] {
+                                    HStack {
+                                        Text(label)
+                                            .font(.system(.body, design: .monospaced))
+                                            .frame(width: 100, alignment: .leading)
+                                        if let ms = timing {
+                                            // proportional bar
+                                            let maxMs = state.resolverTimes.values
+                                                .compactMap { $0 }.max() ?? 1
+                                            GeometryReader { geo in
+                                                RoundedRectangle(cornerRadius: 3)
+                                                    .fill(resolverBarColor(ms))
+                                                    .frame(width: max(4, geo.size.width * (ms / maxMs)))
+                                                    .frame(maxHeight: .infinity)
+                                            }
+                                            .frame(height: 14)
+                                            Text(Optional(ms).rttString)
+                                                .font(.system(.callout, design: .monospaced))
+                                                .foregroundStyle(resolverBarColor(ms))
+                                                .frame(width: 90, alignment: .trailing)
+                                        } else {
+                                            Text("TIMEOUT")
+                                                .foregroundStyle(.red)
+                                                .font(.callout)
+                                            Spacer()
+                                        }
+                                    }
+                                    .padding(.vertical, 5)
+                                    Divider().opacity(0.3)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 4)
+                    }
+                }
+
                 GroupBox("Recent Results") {
                     VStack(spacing: 0) {
                         ForEach(state.results.suffix(30).reversed()) { r in
@@ -103,6 +144,7 @@ struct DNSDetailView: View {
         return v < 50 ? .green : v < 150 ? .yellow : .red
     }
     func qColor(_ t: Double) -> Color { t < 50 ? .green : t < 150 ? .yellow : .red }
+    func resolverBarColor(_ ms: Double) -> Color { ms < 30 ? .green : ms < 100 ? .blue : ms < 300 ? .yellow : .red }
 }
 
 private struct DNSResultRow: View {
