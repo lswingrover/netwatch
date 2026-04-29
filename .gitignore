@@ -1,0 +1,24 @@
+# Swift Package Manager
+.build/
+*.resolved
+
+# Xcode
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+*.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+*.swp
+
+# Build artifacts
+/tmp/NetWatch.app
+/tmp/netwatch_icon_build/
+/tmp/nbuild.log
+/tmp/netwatch_build.log
+
+# User-specific
+*.orig
