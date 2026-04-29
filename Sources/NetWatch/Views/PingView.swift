@@ -80,8 +80,8 @@ struct PingDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Header stats — row 1
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
+                // Header stats — row 1: primary
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
                     StatCard(title: "Last RTT",  value: state.lastRTT.rttString,
                              icon: "timer",     color: rttColor(state.lastRTT))
                     StatCard(title: "Avg RTT",   value: state.avgRTT.rttString,
@@ -90,11 +90,9 @@ struct PingDetailView: View {
                              value: String(format: "%.1f%%", (1 - state.successRate) * 100),
                              icon: "wifi.exclamationmark",
                              color: state.successRate > 0.95 ? .green : .red)
-                    StatCard(title: "Trend",     value: state.trend.symbol,
-                             icon: "arrow.up.right")
                 }
                 // Header stats — row 2: forensics
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
                     StatCard(title: "Jitter",
                              value: state.jitter.rttString,
                              icon: "waveform.path.ecg",
@@ -106,9 +104,18 @@ struct PingDetailView: View {
                              value: state.maxRTT.rttString,
                              icon: "arrow.up.to.line",
                              color: rttColor(state.maxRTT))
+                }
+                // Header stats — row 2b: secondary
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {
                     StatCard(title: "Samples",
                              value: "\(state.results.count)",
                              icon: "number")
+                    StatCard(title: "Trend",     value: state.trend.symbol,
+                             icon: "arrow.up.right")
+                    StatCard(title: "Success Rate",
+                             value: String(format: "%.1f%%", state.successRate * 100),
+                             icon: "checkmark.circle",
+                             color: state.successRate > 0.95 ? .green : state.successRate > 0.7 ? .yellow : .red)
                 }
                 // Header stats — row 3: percentiles
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 12) {

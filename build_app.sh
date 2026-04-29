@@ -116,8 +116,9 @@ LSREG="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/L
 "$LSREG" -kill -r -domain local -domain system -domain user 2>/dev/null || true
 "$LSREG" "$INSTALL_DIR/$APP_BUNDLE" 2>/dev/null || true
 
-# Nuke the icon services store (macOS rebuilds it on demand)
+# Nuke icon caches (macOS rebuilds on demand)
 rm -rf ~/Library/Caches/com.apple.iconservices.store 2>/dev/null || true
+rm -rf ~/Library/Caches/com.apple.dock.iconcache      2>/dev/null || true
 
 # Touch the bundle so Finder sees a new mtime
 touch "$INSTALL_DIR/$APP_BUNDLE"
