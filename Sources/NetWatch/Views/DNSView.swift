@@ -15,10 +15,11 @@ struct DNSView: View {
                 DNSListRow(state: ds).tag(ds.id)
             }
             .listStyle(.sidebar)
-            .frame(minWidth: 200, idealWidth: 220)
+            .frame(minWidth: 200, idealWidth: 220, maxWidth: 300)
 
             if let ds = selectedState {
                 DNSDetailView(state: ds).id(ds.id)
+                    .frame(minWidth: 380)
             } else {
                 Text("Select a domain")
                     .foregroundStyle(.secondary)

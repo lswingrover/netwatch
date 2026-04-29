@@ -27,7 +27,7 @@ struct TracerouteView: View {
                 .tag(target)
             }
             .listStyle(.sidebar)
-            .frame(minWidth: 180, idealWidth: 200)
+            .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
             .toolbar {
                 ToolbarItem {
                     Button {
@@ -42,20 +42,23 @@ struct TracerouteView: View {
             }
 
             // Detail
-            if let target = selectedTarget, let result = trMonitor.results[target] {
-                TracerouteDetailView(result: result, geoCache: trMonitor.geoCache)
-            } else if trMonitor.isRunning {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Running traceroute to \(trMonitor.currentTarget)…")
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                Text(targets.isEmpty ? "Add targets in Preferences" : "Select a target")
-                    .foregroundStyle(.secondary)
+            Group {
+                if let target = selectedTarget, let result = trMonitor.results[target] {
+                    TracerouteDetailView(result: result, geoCache: trMonitor.geoCache)
+                } else if trMonitor.isRunning {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text("Running traceroute to \(trMonitor.currentTarget)…")
+                            .foregroundStyle(.secondary)
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Text(targets.isEmpty ? "Add targets in Preferences" : "Select a target")
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
+            .frame(minWidth: 380)
         }
         .onAppear {
             if selectedTarget == nil { selectedTarget = targets.first }
