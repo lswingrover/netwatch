@@ -107,15 +107,26 @@ fi
 cp -R "$TMP_APP" "$INSTALL_DIR/"
 echo "✅  Installed"
 
-# ── 6. Register with Launch Services + bust icon cache ────────────────────────
+# ── 6. Register with Launch Services + nuke icon cache ────────────────────────
 echo ""
-echo "▶ Registering with Launch Services..."
-/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister \
-  -f "$INSTALL_DIR/$APP_BUNDLE" 2>/dev/null || true
-# Kill Dock to force icon cache refresh (restarts automatically)
-killall Dock 2>/dev/null || true
-sleep 1
-echo "✅  Registered + icon cache cleared"
+echo "▶ Registering with Launch Services + clearing icon cache..."
+LSREG="/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+
+# Full LS database rebuild (not just -f which only re-registers one bundle)
+"$LSREG" -kill -r -domain local -domain system -domain user 2>/dev/null || true
+"$LSREG" "$INSTALL_DIR/$APP_BUNDLE" 2>/dev/null || true
+
+# Nuke the icon services store (macOS rebuilds it on demand)
+rm -rf ~/Library/Caches/com.apple.iconservices.store 2>/dev/null || true
+
+# Touch the bundle so Finder sees a new mtime
+touch "$INSTALL_DIR/$APP_BUNDLE"
+
+# Restart Dock + Finder to pick up fresh icons
+killall Finder 2>/dev/null || true
+killall Dock   2>/dev/null || true
+sleep 2
+echo "✅  Registered + icon cache nuked"
 
 # ── 7. Launch ─────────────────────────────────────────────────────────────────
 echo ""
