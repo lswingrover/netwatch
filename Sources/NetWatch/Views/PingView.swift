@@ -17,12 +17,13 @@ struct PingView: View {
                     .tag(ps.id)
             }
             .listStyle(.sidebar)
-            .frame(minWidth: 200, idealWidth: 240)
+            .frame(minWidth: 200, idealWidth: 240, maxWidth: 300)
 
-            // Right: detail
+            // Right: detail — enforce a minimum so HSplitView can't collapse it
             if let ps = selectedState {
                 PingDetailView(state: ps)
                     .id(ps.id)
+                    .frame(minWidth: 460)
             } else {
                 Text("Select a target")
                     .foregroundStyle(.secondary)

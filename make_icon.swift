@@ -54,28 +54,27 @@ func drawIcon(size: CGFloat) -> NSImage {
     let dotR = size * 0.055
 
     // Draw from largest to smallest so colors overlap correctly
-    let arcColors: [CGColor] = [
-        CGColor(red: 0.2,  green: 0.6,  blue: 1.0,  alpha: 0.35),
-        CGColor(red: 0.35, green: 0.72, blue: 1.0,  alpha: 0.60),
-        CGColor(red: 0.55, green: 0.85, blue: 1.0,  alpha: 0.85),
+    let arcColors: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [
+        (0.2,  0.6,  1.0,  0.35),
+        (0.35, 0.72, 1.0,  0.60),
+        (0.55, 0.85, 1.0,  0.85),
     ]
     let arcRadii: [CGFloat] = [size * 0.40, size * 0.27, size * 0.14]
     let arcWidth = size * 0.055
-    // Counterclockwise from ~36° through 90° (top) to ~144° — arcs point UP
-    let startAngle: CGFloat = .pi / 5           // ~36°
-    let endAngle:   CGFloat = .pi - .pi / 5     // ~144°
-
-    for (i, (r, color)) in zip(arcRadii, arcColors).enumerated() {
-        _ = i
-        ctx.setStrokeColor(color)
-        ctx.setLineWidth(arcWidth)
-        ctx.setLineCap(.round)
-        ctx.addArc(center: CGPoint(x: cx, y: cy),
-                   radius: r,
-                   startAngle: startAngle,
-                   endAngle: endAngle,
-                   clockwise: false)
-        ctx.strokePath()
+    // NSBezierPath uses AppKit degrees in y-up coordinate system:
+    // 0° = right, 90° = TOP, 180° = left.
+    // CCW from 36° through 90° to 144° → arcs fan UPWARD from cy.
+    for (r, (red, green, blue, alpha)) in zip(arcRadii, arcColors) {
+        let arcPath = NSBezierPath()
+        arcPath.appendArc(withCenter: NSPoint(x: cx, y: cy),
+                          radius: r,
+                          startAngle: 36,
+                          endAngle: 144,
+                          clockwise: false)
+        arcPath.lineWidth = arcWidth
+        arcPath.lineCapStyle = .round
+        NSColor(calibratedRed: red, green: green, blue: blue, alpha: alpha).setStroke()
+        arcPath.stroke()
     }
 
     // Center dot
