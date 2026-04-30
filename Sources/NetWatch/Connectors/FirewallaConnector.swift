@@ -1,19 +1,27 @@
-/// FirewallaConnector.swift — NetWatch connector for Firewalla Gold/Purple/Blue+
+/// FirewallaConnector.swift — NetWatch connector for Firewalla Gold
 ///
-/// Talks to the Firewalla local REST API running on port 8833 of your Firewalla
-/// device. Authentication uses a "box token" — a static bearer token you copy
-/// from the Firewalla mobile app (More → Settings → API Access → Box API Token).
+/// Uses SSH→Redis to pull data directly from the Firewalla box, the same
+/// approach as the network-mcp server in ~/Documents/Claude/mcp-servers/.
 ///
-/// API reference: https://firewalla.com/products/firewalla-gold-plus
-/// Community docs: https://github.com/firewalla/firewalla (API section)
+/// All auth is handled by a companion Python script:
+///   ~/Documents/Claude/mcp-servers/netwatch-firewalla-snapshot.py
 ///
-/// Endpoints used:
-///   GET /v1/stats/summary     — bandwidth + session counts
-///   GET /v1/alarms/active     — active security alarms / blocks
-///   GET /v1/flows?count=5     — most recent flows (top-N for context)
-///   GET /v1/host/status       — device CPU/memory/uptime
+/// The script reads credentials from ~/.env:
+///   FIREWALLA_IP              LAN IP (default 192.168.40.1)
+///   FIREWALLA_SSH_USER        SSH user (default pi)
+///   FIREWALLA_SSH_PASS_UUID   1Password item UUID for SSH password
+///
+/// No Box API Token or REST API needed — the Firewalla Gold REST API on port
+/// 8833 is unreliable (returns HTTP 400); SSH→Redis is the proven approach.
+///
+/// The connector shells out to python3.11 with the snapshot script and parses
+/// the JSON result. Process execution is async-bridged via a continuation.
+///
+/// Tested on: Firewalla Gold v1.982 Beta
 
 import Foundation
+
+// MARK: - Connector
 
 final class FirewallaConnector: DeviceConnector {
 
@@ -44,95 +52,129 @@ final class FirewallaConnector: DeviceConnector {
 
     func testConnection() async -> Result<String, Error> {
         do {
-            let data = try await get("/v1/host/status")
-            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let model   = json?["model"]        as? String ?? "Firewalla"
-            let version = json?["releaseTarget"] as? String ?? "unknown"
-            return .success("\(model) · firmware \(version)")
+            let json = try await runSnapshot()
+            if let wans = json["wan_interfaces"] as? [[String: Any]] {
+                let active = wans.filter { ($0["active"] as? Bool) == true }
+                let ip     = (active.first ?? wans.first)?["ip"] as? String ?? "–"
+                let count  = json["total_devices"] as? Int ?? 0
+                return .success("Firewalla Gold · WAN \(ip) · \(count) devices")
+            }
+            return .success("Firewalla Gold · connected")
         } catch {
             return .failure(error)
         }
     }
 
     func fetchSnapshot() async throws -> ConnectorSnapshot {
-        async let statsData  = get("/v1/stats/summary")
-        async let alarmsData = get("/v1/alarms/active")
-        async let hostData   = get("/v1/host/status")
-
-        let (stats, alarms, host) = try await (statsData, alarmsData, hostData)
-
-        let statsJSON  = (try? JSONSerialization.jsonObject(with: stats))  as? [String: Any] ?? [:]
-        let alarmsJSON = (try? JSONSerialization.jsonObject(with: alarms)) as? [[String: Any]] ?? []
-        let hostJSON   = (try? JSONSerialization.jsonObject(with: host))   as? [String: Any] ?? [:]
+        let json = try await runSnapshot()
 
         // ── Metrics ──────────────────────────────────────────────────────────
 
         var metrics: [ConnectorMetric] = []
 
-        // Bandwidth (stats summary returns bytes/s — convert to Mbps)
-        if let bytesIn  = statsJSON["bytesIn"]  as? Double {
-            metrics.append(ConnectorMetric(
-                key: "wan_rx_mbps", label: "WAN RX",
-                value: (bytesIn * 8) / 1_000_000, unit: "Mbps",
-                severity: bytesIn > 100_000_000 ? .warning : .ok))
-        }
-        if let bytesOut = statsJSON["bytesOut"] as? Double {
-            metrics.append(ConnectorMetric(
-                key: "wan_tx_mbps", label: "WAN TX",
-                value: (bytesOut * 8) / 1_000_000, unit: "Mbps"))
-        }
-
-        // Active sessions / flows
-        if let sessions = statsJSON["activeSessions"] as? Double {
-            metrics.append(ConnectorMetric(
-                key: "active_sessions", label: "Active Sessions",
-                value: sessions, unit: ""))
+        // WAN active interface
+        if let wans = json["wan_interfaces"] as? [[String: Any]] {
+            for wan in wans {
+                let desc   = wan["desc"]   as? String ?? wan["name"] as? String ?? "WAN"
+                let ip     = wan["ip"]     as? String ?? ""
+                let active = wan["active"] as? Bool   ?? false
+                let ready  = wan["ready"]  as? Bool   ?? false
+                let sev: MetricSeverity = active ? .ok : (ready ? .warning : .critical)
+                metrics.append(ConnectorMetric(
+                    key: "wan_\(wan["name"] as? String ?? "if")",
+                    label: "\(desc) WAN",
+                    value: 0, unit: ip.isEmpty ? (active ? "up" : "down") : ip,
+                    severity: sev))
+            }
         }
 
-        // Host: CPU & memory
-        if let cpu = hostJSON["cpuUsage"] as? Double {
+        // Public IP
+        if let pubIP = json["public_ip"] as? String, !pubIP.isEmpty {
             metrics.append(ConnectorMetric(
-                key: "cpu_pct", label: "CPU",
-                value: cpu * 100, unit: "%",
-                severity: cpu > 0.85 ? .warning : .ok))
-        }
-        if let mem = hostJSON["memUsage"] as? Double {
-            metrics.append(ConnectorMetric(
-                key: "mem_pct", label: "Memory",
-                value: mem * 100, unit: "%",
-                severity: mem > 0.90 ? .warning : .ok))
-        }
-        if let uptime = hostJSON["uptime"] as? Double {
-            metrics.append(ConnectorMetric(
-                key: "uptime_h", label: "Uptime",
-                value: uptime / 3600, unit: "h"))
+                key: "public_ip", label: "Public IP",
+                value: 0, unit: pubIP))
         }
 
         // Alarm count
-        let alarmCount = Double(alarmsJSON.count)
-        metrics.append(ConnectorMetric(
-            key: "active_alarms", label: "Active Alarms",
-            value: alarmCount, unit: "",
-            severity: alarmCount > 0 ? .warning : .ok))
+        if let alarmCount = json["alarm_count"] as? Int {
+            metrics.append(ConnectorMetric(
+                key: "active_alarms", label: "Active Alarms",
+                value: Double(alarmCount), unit: "",
+                severity: alarmCount > 0 ? .warning : .ok))
+        }
+
+        // Devices
+        if let total = json["total_devices"] as? Int, total >= 0 {
+            metrics.append(ConnectorMetric(
+                key: "total_devices", label: "Total Devices",
+                value: Double(total), unit: ""))
+        }
+        if let active = json["active_devices_2h"] as? Int {
+            metrics.append(ConnectorMetric(
+                key: "active_devices", label: "Active (2h)",
+                value: Double(active), unit: ""))
+        }
+
+        // Uptime
+        if let uptimeS = json["uptime_seconds"] as? Double, uptimeS > 0 {
+            metrics.append(ConnectorMetric(
+                key: "uptime_h", label: "Uptime",
+                value: uptimeS / 3600, unit: "h"))
+        }
 
         // ── Events ───────────────────────────────────────────────────────────
 
         var events: [ConnectorEvent] = []
-        for alarm in alarmsJSON.prefix(10) {
-            let ts  = (alarm["ts"] as? TimeInterval).map { Date(timeIntervalSince1970: $0) } ?? Date()
-            let msg = alarm["message"] as? String ?? alarm["type"] as? String ?? "Unknown alarm"
-            let sev = (alarm["severity"] as? String == "high") ? MetricSeverity.critical : .warning
+
+        if let alarms = json["recent_alarms"] as? [[String: Any]] {
+            for alarm in alarms.prefix(10) {
+                let ts: Date
+                if let tsStr = alarm["timestamp"] as? String,
+                   let tsVal = Double(tsStr) {
+                    ts = Date(timeIntervalSince1970: tsVal)
+                } else {
+                    ts = Date()
+                }
+                let atype   = alarm["type"]    as? String ?? "ALARM"
+                let device  = alarm["device"]  as? String ?? "?"
+                let message = alarm["message"] as? String ?? atype
+                let sev: MetricSeverity = alarm["severity"] as? String == "high" ? .critical : .warning
+                let description = message.isEmpty ? "\(atype) — \(device)" : "\(device): \(message)"
+                events.append(ConnectorEvent(
+                    timestamp: ts,
+                    type: "alarm",
+                    description: description,
+                    severity: sev))
+            }
+        }
+
+        // Rebooted recently?
+        if let uptimeS = json["uptime_seconds"] as? Double, uptimeS > 0, uptimeS < 300 {
             events.append(ConnectorEvent(
-                timestamp: ts, type: "alarm",
-                description: msg, severity: sev))
+                timestamp: Date(),
+                type: "reboot",
+                description: "Firewalla recently rebooted (uptime < 5 min)",
+                severity: .warning))
+        }
+
+        // WAN down?
+        let anyActiveWAN = (json["wan_interfaces"] as? [[String: Any]])?.contains {
+            ($0["active"] as? Bool) == true
+        } ?? true
+        if !anyActiveWAN, !(json["wan_interfaces"] as? [[String: Any]] ?? []).isEmpty {
+            events.append(ConnectorEvent(
+                timestamp: Date(),
+                type: "wan_down",
+                description: "No active WAN interface on Firewalla",
+                severity: .critical))
         }
 
         // ── Summary ──────────────────────────────────────────────────────────
 
-        let model    = hostJSON["model"]  as? String ?? "Firewalla"
-        let rxMbps   = metrics.first { $0.key == "wan_rx_mbps" }?.value ?? 0
-        let txMbps   = metrics.first { $0.key == "wan_tx_mbps" }?.value ?? 0
-        let summary  = "\(model) — RX \(String(format: "%.1f", rxMbps)) Mbps / TX \(String(format: "%.1f", txMbps)) Mbps · \(alarmsJSON.count) active alarm(s)"
+        let pubIP      = json["public_ip"]    as? String ?? "–"
+        let alarmCount = json["alarm_count"]  as? Int    ?? 0
+        let devCount   = json["total_devices"] as? Int   ?? 0
+        let summary    = "Firewalla Gold · Public \(pubIP) · \(devCount) devices · \(alarmCount) alarm(s)"
 
         let snapshot = ConnectorSnapshot(
             connectorId: id, connectorName: displayName,
@@ -144,33 +186,102 @@ final class FirewallaConnector: DeviceConnector {
         return snapshot
     }
 
-    // MARK: - HTTP
+    // MARK: - Process
 
-    /// Effective base URL, defaulting to port 8833.
-    private var baseURL: URL {
-        let host = config.host.isEmpty ? "192.168.1.1" : config.host
-        let port = config.port > 0 ? config.port : 8833
-        return URL(string: "http://\(host):\(port)")!
+    /// Path to the companion Python snapshot script.
+    private var snapshotScriptPath: String {
+        let custom = config.host   // reuse host field as optional script override
+        if !custom.isEmpty && custom.hasSuffix(".py") { return custom }
+        let base = NSString("~/Documents/Claude/mcp-servers/netwatch-firewalla-snapshot.py")
+        return base.expandingTildeInPath
     }
 
-    private func get(_ path: String) async throws -> Data {
-        var request = URLRequest(url: baseURL.appendingPathComponent(path))
-        request.timeoutInterval = 10
-        if !config.apiKey.isEmpty {
-            request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
-        }
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+    private static let pythonPath = "/opt/homebrew/bin/python3.11"
+
+    /// Run the snapshot script and return the decoded JSON dictionary.
+    private func runSnapshot() async throws -> [String: Any] {
+        let scriptPath = snapshotScriptPath
+
+        // Verify script exists
+        guard FileManager.default.fileExists(atPath: scriptPath) else {
             isConnected = false
-            lastError   = "HTTP \(code) from \(path)"
-            throw ConnectorError.httpError(code)
+            lastError   = "Snapshot script not found at \(scriptPath)"
+            throw ConnectorError.missingConfig("snapshot script")
         }
-        return data
+
+        let output = try await runProcess(
+            executable: Self.pythonPath,
+            arguments:  [scriptPath],
+            timeoutSec: 45      // SSH + Redis queries can take a few seconds
+        )
+
+        guard let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            isConnected = false
+            lastError   = "Invalid JSON from snapshot script"
+            throw ConnectorError.parseError("Invalid JSON")
+        }
+
+        if let error = json["error"] as? String {
+            isConnected = false
+            lastError   = error
+            throw ConnectorError.parseError(error)
+        }
+
+        return json
+    }
+
+    /// Async wrapper around Process + Pipe.
+    private func runProcess(executable: String, arguments: [String], timeoutSec: Double) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+
+            process.executableURL  = URL(fileURLWithPath: executable)
+            process.arguments      = arguments
+            process.standardOutput = stdoutPipe
+            process.standardError  = stderrPipe
+
+            // Timeout watchdog
+            let timer = DispatchSource.makeTimerSource(queue: .global())
+            timer.schedule(deadline: .now() + timeoutSec)
+            timer.setEventHandler {
+                process.terminate()
+                timer.cancel()
+                continuation.resume(throwing: ConnectorError.parseError("Snapshot script timed out"))
+            }
+            timer.resume()
+
+            process.terminationHandler = { _ in
+                timer.cancel()
+                let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
+                                   encoding: .utf8) ?? ""
+                if process.terminationStatus == 0 {
+                    continuation.resume(returning: stdout)
+                } else {
+                    let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+                                      encoding: .utf8) ?? ""
+                    let msg = stdout.isEmpty ? stderr : stdout
+                    continuation.resume(throwing: ConnectorError.parseError(
+                        msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? "Script exited \(process.terminationStatus)"
+                            : msg.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ))
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                timer.cancel()
+                continuation.resume(throwing: error)
+            }
+        }
     }
 }
 
-// MARK: - Errors
+// MARK: - Errors (shared across all connectors)
 
 enum ConnectorError: Error, LocalizedError {
     case httpError(Int)
