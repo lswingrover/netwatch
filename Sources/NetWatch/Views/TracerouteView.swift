@@ -5,6 +5,7 @@ struct TracerouteView: View {
     @EnvironmentObject var trMonitor: TracerouteMonitor
     @EnvironmentObject var monitor: NetworkMonitorService
     @State private var selectedTarget: String? = nil
+    @State private var showAddSheet = false
 
     var targets: [String] { monitor.settings.tracerouteTargets }
 
@@ -25,10 +26,23 @@ struct TracerouteView: View {
                     }
                 }
                 .tag(target)
+                .contextMenu {
+                    Button("Delete", role: .destructive) {
+                        if selectedTarget == target { selectedTarget = nil }
+                        monitor.settings.tracerouteTargets.removeAll { $0 == target }
+                        monitor.restart()
+                    }
+                }
             }
             .listStyle(.sidebar)
             .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
             .toolbar {
+                ToolbarItem {
+                    Button { showAddSheet = true } label: {
+                        Label("Add Target", systemImage: "plus")
+                    }
+                    .help("Add traceroute target")
+                }
                 ToolbarItem {
                     Button {
                         if let t = selectedTarget { trMonitor.runNow(target: t) }
@@ -38,6 +52,13 @@ struct TracerouteView: View {
                     }
                     .disabled(trMonitor.isRunning)
                     .help("Run traceroute immediately")
+                }
+            }
+            .sheet(isPresented: $showAddSheet) {
+                TracerouteTargetSheet { host in
+                    monitor.settings.tracerouteTargets.append(host)
+                    monitor.restart()
+                    selectedTarget = host
                 }
             }
 
@@ -53,7 +74,7 @@ struct TracerouteView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    Text(targets.isEmpty ? "Add targets in Preferences" : "Select a target")
+                    Text(targets.isEmpty ? "Add a target with + above" : "Select a target")
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -65,6 +86,52 @@ struct TracerouteView: View {
         }
     }
 }
+
+// MARK: - Add Sheet
+
+struct TracerouteTargetSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var host = ""
+    let onSave: (String) -> Void
+
+    private var hostTrimmed: String { host.trimmingCharacters(in: .whitespaces) }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Add Traceroute Target").font(.headline)
+
+            Form {
+                LabeledContent("Host / IP") {
+                    TextField("e.g. 1.1.1.1 or us04web.zoom.us", text: $host)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minWidth: 240)
+                        .onSubmit { saveIfValid() }
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Add") { saveIfValid() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(hostTrimmed.isEmpty)
+            }
+            .padding(.horizontal, 4)
+        }
+        .padding()
+        .frame(minWidth: 360, minHeight: 150)
+    }
+
+    private func saveIfValid() {
+        guard !hostTrimmed.isEmpty else { return }
+        onSave(hostTrimmed)
+        dismiss()
+    }
+}
+
+// MARK: - Detail View
 
 struct TracerouteDetailView: View {
     let result: TracerouteResult

@@ -4,6 +4,8 @@ import Charts
 struct PingView: View {
     @EnvironmentObject var monitor: NetworkMonitorService
     @State private var selectedID: String? = nil
+    @State private var showAddSheet  = false
+    @State private var editTarget: PingTarget? = nil
 
     var selectedState: PingState? {
         monitor.pingStates.first { $0.id == selectedID }
@@ -15,11 +17,50 @@ struct PingView: View {
             List(monitor.pingStates, selection: $selectedID) { ps in
                 PingListRow(state: ps)
                     .tag(ps.id)
+                    .contextMenu {
+                        Button("Edit…") {
+                            editTarget = ps.target
+                        }
+                        Divider()
+                        Button("Delete", role: .destructive) {
+                            if selectedID == ps.id { selectedID = nil }
+                            monitor.settings.pingTargets.removeAll { $0.host == ps.target.host }
+                            monitor.restart()
+                        }
+                    }
             }
             .listStyle(.sidebar)
             .frame(minWidth: 200, idealWidth: 240, maxWidth: 300)
+            .toolbar {
+                ToolbarItem {
+                    Button { showAddSheet = true } label: {
+                        Label("Add Target", systemImage: "plus")
+                    }
+                    .help("Add ping target")
+                }
+            }
+            .sheet(isPresented: $showAddSheet) {
+                PingTargetSheet(title: "Add Ping Target", host: "", label: "") { host, label in
+                    monitor.settings.pingTargets.append(
+                        PingTarget(host: host, label: label.isEmpty ? nil : label)
+                    )
+                    monitor.restart()
+                }
+            }
+            .sheet(item: $editTarget) { target in
+                PingTargetSheet(title: "Edit Ping Target",
+                                host: target.host,
+                                label: target.label ?? "") { newHost, newLabel in
+                    if let idx = monitor.settings.pingTargets.firstIndex(where: { $0.host == target.host }) {
+                        monitor.settings.pingTargets[idx].host  = newHost
+                        monitor.settings.pingTargets[idx].label = newLabel.isEmpty ? nil : newLabel
+                        if selectedID == target.host { selectedID = newHost }
+                        monitor.restart()
+                    }
+                }
+            }
 
-            // Right: detail — enforce a minimum so HSplitView can't collapse it
+            // Right: detail
             if let ps = selectedState {
                 PingDetailView(state: ps)
                     .id(ps.id)
@@ -32,6 +73,66 @@ struct PingView: View {
         }
     }
 }
+
+// MARK: - Add / Edit Sheet
+
+struct PingTargetSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    @State private var host:  String
+    @State private var label: String
+    let onSave: (String, String) -> Void
+
+    init(title: String, host: String, label: String, onSave: @escaping (String, String) -> Void) {
+        self.title  = title
+        self.onSave = onSave
+        _host  = State(initialValue: host)
+        _label = State(initialValue: label)
+    }
+
+    private var hostTrimmed: String { host.trimmingCharacters(in: .whitespaces) }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text(title).font(.headline)
+
+            Form {
+                LabeledContent("Host / IP") {
+                    TextField("e.g. 1.1.1.1 or router.local", text: $host)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minWidth: 220)
+                        .onSubmit { saveIfValid() }
+                }
+                LabeledContent("Label") {
+                    TextField("optional — shown in sidebar", text: $label)
+                        .frame(minWidth: 220)
+                        .onSubmit { saveIfValid() }
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save") { saveIfValid() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(hostTrimmed.isEmpty)
+            }
+            .padding(.horizontal, 4)
+        }
+        .padding()
+        .frame(minWidth: 380, minHeight: 200)
+    }
+
+    private func saveIfValid() {
+        guard !hostTrimmed.isEmpty else { return }
+        onSave(hostTrimmed, label.trimmingCharacters(in: .whitespaces))
+        dismiss()
+    }
+}
+
+// MARK: - List Row
 
 struct PingListRow: View {
     @ObservedObject var state: PingState
@@ -74,6 +175,8 @@ private struct MiniRTTSparkline: View {
         .chartYAxis(.hidden)
     }
 }
+
+// MARK: - Detail View
 
 struct PingDetailView: View {
     @ObservedObject var state: PingState

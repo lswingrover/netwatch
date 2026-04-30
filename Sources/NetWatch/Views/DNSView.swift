@@ -4,6 +4,8 @@ import Charts
 struct DNSView: View {
     @EnvironmentObject var monitor: NetworkMonitorService
     @State private var selectedID: String? = nil
+    @State private var showAddSheet  = false
+    @State private var editTarget: DNSTarget? = nil
 
     var selectedState: DNSState? {
         monitor.dnsStates.first { $0.id == selectedID }
@@ -12,10 +14,45 @@ struct DNSView: View {
     var body: some View {
         HSplitView {
             List(monitor.dnsStates, selection: $selectedID) { ds in
-                DNSListRow(state: ds).tag(ds.id)
+                DNSListRow(state: ds)
+                    .tag(ds.id)
+                    .contextMenu {
+                        Button("Edit Domain…") {
+                            editTarget = ds.target
+                        }
+                        Divider()
+                        Button("Delete", role: .destructive) {
+                            if selectedID == ds.id { selectedID = nil }
+                            monitor.settings.dnsTargets.removeAll { $0.domain == ds.target.domain }
+                            monitor.restart()
+                        }
+                    }
             }
             .listStyle(.sidebar)
             .frame(minWidth: 200, idealWidth: 220, maxWidth: 300)
+            .toolbar {
+                ToolbarItem {
+                    Button { showAddSheet = true } label: {
+                        Label("Add Domain", systemImage: "plus")
+                    }
+                    .help("Add DNS domain")
+                }
+            }
+            .sheet(isPresented: $showAddSheet) {
+                DNSTargetSheet(title: "Add DNS Domain", domain: "") { domain in
+                    monitor.settings.dnsTargets.append(DNSTarget(domain: domain))
+                    monitor.restart()
+                }
+            }
+            .sheet(item: $editTarget) { target in
+                DNSTargetSheet(title: "Edit DNS Domain", domain: target.domain) { newDomain in
+                    if let idx = monitor.settings.dnsTargets.firstIndex(where: { $0.domain == target.domain }) {
+                        monitor.settings.dnsTargets[idx].domain = newDomain
+                        if selectedID == target.domain { selectedID = newDomain }
+                        monitor.restart()
+                    }
+                }
+            }
 
             if let ds = selectedState {
                 DNSDetailView(state: ds).id(ds.id)
@@ -28,6 +65,59 @@ struct DNSView: View {
         }
     }
 }
+
+// MARK: - Add / Edit Sheet
+
+struct DNSTargetSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    @State private var domain: String
+    let onSave: (String) -> Void
+
+    init(title: String, domain: String, onSave: @escaping (String) -> Void) {
+        self.title  = title
+        self.onSave = onSave
+        _domain = State(initialValue: domain)
+    }
+
+    private var domainTrimmed: String { domain.trimmingCharacters(in: .whitespaces) }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text(title).font(.headline)
+
+            Form {
+                LabeledContent("Domain") {
+                    TextField("e.g. github.com", text: $domain)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minWidth: 220)
+                        .onSubmit { saveIfValid() }
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save") { saveIfValid() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(domainTrimmed.isEmpty)
+            }
+            .padding(.horizontal, 4)
+        }
+        .padding()
+        .frame(minWidth: 340, minHeight: 160)
+    }
+
+    private func saveIfValid() {
+        guard !domainTrimmed.isEmpty else { return }
+        onSave(domainTrimmed)
+        dismiss()
+    }
+}
+
+// MARK: - List Row
 
 struct DNSListRow: View {
     @ObservedObject var state: DNSState
@@ -47,6 +137,8 @@ struct DNSListRow: View {
         }
     }
 }
+
+// MARK: - Detail View
 
 struct DNSDetailView: View {
     @ObservedObject var state: DNSState

@@ -46,19 +46,26 @@ struct TargetsTab: View {
         Form {
             Section("Ping Targets") {
                 List {
-                    ForEach($settings.pingTargets) { $target in
+                    ForEach(Array(settings.pingTargets.enumerated()), id: \.element.id) { idx, _ in
                         HStack {
-                            TextField("Host", text: $target.host)
+                            TextField("Host", text: $settings.pingTargets[idx].host)
                                 .font(.system(.body, design: .monospaced))
                             TextField("Label (optional)", text: Binding(
-                                get: { target.label ?? "" },
-                                set: { target.label = $0.isEmpty ? nil : $0 }
+                                get: { settings.pingTargets[idx].label ?? "" },
+                                set: { settings.pingTargets[idx].label = $0.isEmpty ? nil : $0 }
                             ))
                             .foregroundStyle(.secondary)
+                            Button(role: .destructive) {
+                                settings.pingTargets.remove(at: idx)
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Remove this ping target")
                         }
                     }
-                    .onDelete { settings.pingTargets.remove(atOffsets: $0) }
-                    .onMove  { settings.pingTargets.move(fromOffsets: $0, toOffset: $1) }
+                    .onMove { settings.pingTargets.move(fromOffsets: $0, toOffset: $1) }
                 }
                 .frame(minHeight: 100, maxHeight: 200)
 
@@ -72,12 +79,22 @@ struct TargetsTab: View {
 
             Section("DNS Domains") {
                 List {
-                    ForEach($settings.dnsTargets) { $target in
-                        TextField("Domain", text: $target.domain)
-                            .font(.system(.body, design: .monospaced))
+                    ForEach(Array(settings.dnsTargets.enumerated()), id: \.element.id) { idx, _ in
+                        HStack {
+                            TextField("Domain", text: $settings.dnsTargets[idx].domain)
+                                .font(.system(.body, design: .monospaced))
+                            Spacer()
+                            Button(role: .destructive) {
+                                settings.dnsTargets.remove(at: idx)
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Remove this DNS domain")
+                        }
                     }
-                    .onDelete { settings.dnsTargets.remove(atOffsets: $0) }
-                    .onMove  { settings.dnsTargets.move(fromOffsets: $0, toOffset: $1) }
+                    .onMove { settings.dnsTargets.move(fromOffsets: $0, toOffset: $1) }
                 }
                 .frame(minHeight: 100, maxHeight: 160)
 
@@ -90,12 +107,22 @@ struct TargetsTab: View {
 
             Section("Traceroute Targets") {
                 List {
-                    ForEach(settings.tracerouteTargets.indices, id: \.self) { idx in
-                        TextField("Host / IP", text: $settings.tracerouteTargets[idx])
-                            .font(.system(.body, design: .monospaced))
+                    ForEach(Array(settings.tracerouteTargets.enumerated()), id: \.element) { idx, _ in
+                        HStack {
+                            TextField("Host / IP", text: $settings.tracerouteTargets[idx])
+                                .font(.system(.body, design: .monospaced))
+                            Spacer()
+                            Button(role: .destructive) {
+                                settings.tracerouteTargets.remove(at: idx)
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .foregroundStyle(.red)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Remove this traceroute target")
+                        }
                     }
-                    .onDelete { settings.tracerouteTargets.remove(atOffsets: $0) }
-                    .onMove  { settings.tracerouteTargets.move(fromOffsets: $0, toOffset: $1) }
+                    .onMove { settings.tracerouteTargets.move(fromOffsets: $0, toOffset: $1) }
                 }
                 .frame(minHeight: 60, maxHeight: 120)
 

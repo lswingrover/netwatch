@@ -114,8 +114,11 @@ for size in sizes {
     pngPaths[size] = path
 }
 
-// Build iconset directory for iconutil
+// Build iconset directory for iconutil — always start fresh so stale PNGs
+// from a previous run can't survive (FileManager.copyItem silently fails on
+// existing destinations, which would bake old art into the .icns).
 let iconsetDir = "\(outDir)/AppIcon.iconset"
+try? FileManager.default.removeItem(atPath: iconsetDir)
 try? FileManager.default.createDirectory(atPath: iconsetDir, withIntermediateDirectories: true)
 
 let iconsetMap: [(filename: String, size: Int)] = [

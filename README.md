@@ -165,16 +165,30 @@ build_app.sh                   One-shot build + sign + install + cache-nuke scri
 
 ---
 
-## Build & Install
+## Install
 
-### One-shot script
+> **This repo is source code only — there is no pre-built download.** You build it yourself in about 30 seconds. The build script handles everything including icon generation, signing, and installing to `/Applications`.
+
+### Prerequisites
+
+- **macOS 14 Sonoma or later**
+- **Xcode Command Line Tools** (free, ~2 GB). If you don't have them:
+  ```bash
+  xcode-select --install
+  ```
+  A dialog will appear — click Install and wait. Skip this step if you already have Xcode installed.
+
+You do **not** need a paid Apple Developer account. You do **not** need Xcode itself (the command-line tools are enough).
+
+### Build & Install
+
 ```bash
 git clone https://github.com/lswingrover/netwatch.git
 cd netwatch
 bash build_app.sh
 ```
 
-Builds a release binary with `swift build -c release`, generates the app icon, assembles `NetWatch.app`, ad-hoc signs it, installs to `/Applications`, rebuilds the LaunchServices database, nukes the icon cache, and opens the app.
+That's it. The script compiles the Swift source, generates the app icon, assembles `NetWatch.app`, ad-hoc signs it, installs it to `/Applications`, and opens it. Total time: ~30 seconds on Apple Silicon, ~60 seconds on Intel.
 
 **Options:**
 ```
@@ -182,11 +196,36 @@ Builds a release binary with `swift build -c release`, generates the app icon, a
 --no-install  Stop after assembly; app lands at /tmp/NetWatch.app
 ```
 
-### What the build script actually does
+### First launch — Gatekeeper warning
+
+Because NetWatch is ad-hoc signed (not notarized by Apple), macOS will block the very first launch with:
+
+> *"NetWatch cannot be opened because it is from an unidentified developer."*
+
+**Fix — one of two options:**
+
+**Option A (GUI):** In Finder, navigate to `/Applications`, right-click `NetWatch.app` → **Open** → click **Open** in the confirmation dialog. You'll only need to do this once; macOS remembers the exception.
+
+**Option B (Terminal):**
+```bash
+xattr -dr com.apple.quarantine /Applications/NetWatch.app
+open /Applications/NetWatch.app
+```
+
+This removes the quarantine flag that macOS adds to downloaded files. It's the same operation Option A performs under the hood.
+
+> **Why is it safe?** The ad-hoc signature (`codesign --sign -`) proves the binary hasn't been tampered with since it was built on your machine. It just doesn't have Apple's notarization stamp, which is only required for distributing to other people's machines.
+
+### Add to Dock
+
+Right-click the NetWatch icon in the Dock while it's running → **Options → Keep in Dock**.  
+Or drag `/Applications/NetWatch.app` into your Dock manually.
+
+### What the build script does (step by step)
 
 ```
-1. swift build -c release          Compiles all Swift sources; output at .build/release/NetWatch
-2. swift make_icon.swift           Renders PNGs at 16–1024px → iconutil → AppIcon.icns
+1. swift build -c release          Compiles all Swift sources → .build/release/NetWatch
+2. swift make_icon.swift           Renders AppIcon PNGs at 16–1024px → iconutil → AppIcon.icns
 3. Assemble /tmp/NetWatch.app      MacOS/ binary + Resources/ bundle + Info.plist
 4. codesign --sign - --deep        Ad-hoc signature covering all Mach-O binaries in the bundle
 5. cp -R to /Applications          Replaces any existing installation
@@ -195,10 +234,6 @@ Builds a release binary with `swift build -c release`, generates the app icon, a
 8. killall Finder && killall Dock  Forces both to reload from the rebuilt LS database
 9. open /Applications/NetWatch.app Launches the new version
 ```
-
-### Dock
-Right-click the NetWatch icon in the Dock while it's running → **Options → Keep in Dock**.  
-Or drag `/Applications/NetWatch.app` into your Dock manually.
 
 ---
 
