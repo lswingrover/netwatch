@@ -6,6 +6,7 @@ enum NavItem: String, CaseIterable, Identifiable {
     case ping       = "Ping Targets"
     case dns        = "DNS"
     case traceroute = "Traceroute"
+    case devices    = "Devices"
     case incidents  = "Incidents"
 
     var id: String { rawValue }
@@ -17,6 +18,7 @@ enum NavItem: String, CaseIterable, Identifiable {
         case .ping:       "antenna.radiowaves.left.and.right"
         case .dns:        "server.rack"
         case .traceroute: "point.3.connected.trianglepath.dotted"
+        case .devices:    "cable.connector.horizontal"
         case .incidents:  "exclamationmark.triangle"
         }
     }
@@ -25,6 +27,7 @@ enum NavItem: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @EnvironmentObject var monitor: NetworkMonitorService
     @EnvironmentObject var ifMonitor: InterfaceMonitor
+    @EnvironmentObject var connectorManager: ConnectorManager
     @State private var selection: NavItem = .overview
 
     var body: some View {
@@ -49,6 +52,7 @@ struct ContentView: View {
                 case .ping:       PingView()
                 case .dns:        DNSView()
                 case .traceroute: TracerouteView()
+                case .devices:    ConnectorsView()
                 case .incidents:  IncidentsView()
                 }
             }

@@ -13,31 +13,40 @@ struct DNSView: View {
 
     var body: some View {
         HSplitView {
-            List(monitor.dnsStates, selection: $selectedID) { ds in
-                DNSListRow(state: ds)
-                    .tag(ds.id)
-                    .contextMenu {
-                        Button("Edit Domain…") {
-                            editTarget = ds.target
+            // Left panel: list + footer add button
+            VStack(spacing: 0) {
+                List(monitor.dnsStates, selection: $selectedID) { ds in
+                    DNSListRow(state: ds)
+                        .tag(ds.id)
+                        .contextMenu {
+                            Button("Edit Domain…") { editTarget = ds.target }
+                            Divider()
+                            Button("Delete", role: .destructive) {
+                                if selectedID == ds.id { selectedID = nil }
+                                monitor.settings.dnsTargets.removeAll { $0.domain == ds.target.domain }
+                                monitor.restart()
+                            }
                         }
-                        Divider()
-                        Button("Delete", role: .destructive) {
-                            if selectedID == ds.id { selectedID = nil }
-                            monitor.settings.dnsTargets.removeAll { $0.domain == ds.target.domain }
-                            monitor.restart()
-                        }
-                    }
-            }
-            .listStyle(.sidebar)
-            .frame(minWidth: 200, idealWidth: 220, maxWidth: 300)
-            .toolbar {
-                ToolbarItem {
-                    Button { showAddSheet = true } label: {
-                        Label("Add Domain", systemImage: "plus")
-                    }
-                    .help("Add DNS domain")
                 }
+                .listStyle(.sidebar)
+
+                Divider()
+                HStack(spacing: 0) {
+                    Button { showAddSheet = true } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(width: 24, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add DNS domain")
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+                .frame(height: 28)
+                .background(Color(NSColor.windowBackgroundColor))
             }
+            .frame(minWidth: 200, idealWidth: 220, maxWidth: 300)
             .sheet(isPresented: $showAddSheet) {
                 DNSTargetSheet(title: "Add DNS Domain", domain: "") { domain in
                     monitor.settings.dnsTargets.append(DNSTarget(domain: domain))

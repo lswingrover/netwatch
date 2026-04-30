@@ -11,49 +11,65 @@ struct TracerouteView: View {
 
     var body: some View {
         HSplitView {
-            // Target list
-            List(targets, id: \.self, selection: $selectedTarget) { target in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Circle()
-                            .fill(trMonitor.currentTarget == target && trMonitor.isRunning ? Color.yellow : .green)
-                            .frame(width: 8, height: 8)
-                        Text(target).font(.body).lineLimit(1)
+            // Left panel: list + footer
+            VStack(spacing: 0) {
+                List(targets, id: \.self, selection: $selectedTarget) { target in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Circle()
+                                .fill(trMonitor.currentTarget == target && trMonitor.isRunning ? Color.yellow : .green)
+                                .frame(width: 8, height: 8)
+                            Text(target).font(.body).lineLimit(1)
+                        }
+                        if let result = trMonitor.results[target] {
+                            Text("\(result.hopCount) hops · \(result.timestamp, style: .time)")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
-                    if let result = trMonitor.results[target] {
-                        Text("\(result.hopCount) hops · \(result.timestamp, style: .time)")
-                            .font(.caption).foregroundStyle(.secondary)
+                    .tag(target)
+                    .contextMenu {
+                        Button("Delete", role: .destructive) {
+                            if selectedTarget == target { selectedTarget = nil }
+                            monitor.settings.tracerouteTargets.removeAll { $0 == target }
+                            monitor.restart()
+                        }
                     }
                 }
-                .tag(target)
-                .contextMenu {
-                    Button("Delete", role: .destructive) {
-                        if selectedTarget == target { selectedTarget = nil }
-                        monitor.settings.tracerouteTargets.removeAll { $0 == target }
-                        monitor.restart()
-                    }
-                }
-            }
-            .listStyle(.sidebar)
-            .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
-            .toolbar {
-                ToolbarItem {
+                .listStyle(.sidebar)
+
+                Divider()
+                HStack(spacing: 0) {
                     Button { showAddSheet = true } label: {
-                        Label("Add Target", systemImage: "plus")
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(width: 24, height: 22)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     .help("Add traceroute target")
-                }
-                ToolbarItem {
+
+                    Divider().frame(height: 16).padding(.horizontal, 2)
+
                     Button {
                         if let t = selectedTarget { trMonitor.runNow(target: t) }
                         else { targets.forEach { trMonitor.runNow(target: $0) } }
                     } label: {
-                        Label("Run Now", systemImage: "arrow.clockwise")
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(width: 24, height: 22)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     .disabled(trMonitor.isRunning)
-                    .help("Run traceroute immediately")
+                    .help("Run traceroute now")
+
+                    Spacer()
                 }
+                .padding(.horizontal, 4)
+                .frame(height: 28)
+                .background(Color(NSColor.windowBackgroundColor))
             }
+            .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
             .sheet(isPresented: $showAddSheet) {
                 TracerouteTargetSheet { host in
                     monitor.settings.tracerouteTargets.append(host)

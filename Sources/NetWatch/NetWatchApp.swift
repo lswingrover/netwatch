@@ -12,9 +12,11 @@ struct NetWatchApp: App {
                 .environmentObject(monitor)
                 .environmentObject(monitor.interfaceMonitor)
                 .environmentObject(monitor.tracerouteMonitor)
+                .environmentObject(monitor.connectorManager)
                 .environmentObject(monitor.incidentManager)
                 .environmentObject(updateChecker)
                 .onAppear {
+                    registerConnectors()
                     monitor.start()
                     updateChecker.start()
                     UNUserNotificationCenter.current()
@@ -74,7 +76,7 @@ struct NetWatchApp: App {
         Settings {
             PreferencesView()
                 .environmentObject(monitor)
-                .frame(width: 560, height: 480)
+                .frame(width: 600, height: 520)
         }
 
         MenuBarExtra {
@@ -89,5 +91,56 @@ struct NetWatchApp: App {
                 )
         }
         .menuBarExtraStyle(.window)
+    }
+
+    // MARK: - Connector Registration
+
+    /// Register all built-in device connectors with the shared registry.
+    ///
+    /// To add support for a new device:
+    ///   1. Create a class conforming to `DeviceConnector` (use FirewallaConnector as reference).
+    ///   2. Define a `ConnectorDescriptor` with your device's metadata below.
+    ///   3. Call `ConnectorRegistry.shared.register(descriptor, factory:)` here.
+    ///   No other files need to change.
+    private func registerConnectors() {
+        // ── Firewalla ─────────────────────────────────────────────────────────
+        let firewallaDescriptor = ConnectorDescriptor(
+            id: "firewalla",
+            displayName: "Firewalla",
+            iconName: "shield.lefthalf.filled",
+            description: "Security events, bandwidth, and device activity from your Firewalla Gold, Purple, or Blue+.",
+            vendor: "Firewalla Inc.",
+            docsURL: "https://github.com/lswingrover/NetWatch#firewalla-connector",
+            configHelp: ConnectorConfigHelp(
+                hostPlaceholder: "192.168.1.1",
+                hostHelp: "Local IP of your Firewalla",
+                apiKeyLabel: "Box API Token",
+                apiKeyHelp: "Firewalla app → More → Settings → API Access",
+                usernameLabel: "",
+                passwordLabel: "",
+                showCredentials: false
+            )
+        )
+        ConnectorRegistry.shared.register(firewallaDescriptor) { FirewallaConnector(config: $0) }
+
+        // ── Netgear Nighthawk ─────────────────────────────────────────────────
+        let nighthawkDescriptor = ConnectorDescriptor(
+            id: "nighthawk",
+            displayName: "Netgear Nighthawk",
+            iconName: "wifi.router",
+            description: "WAN IP, uptime, traffic meter, and connection state from your Netgear Nighthawk router.",
+            vendor: "Netgear",
+            docsURL: "https://github.com/lswingrover/NetWatch#nighthawk-connector",
+            configHelp: ConnectorConfigHelp(
+                hostPlaceholder: "192.168.1.1",
+                hostHelp: "Local IP of your Nighthawk (usually 192.168.1.1)",
+                apiKeyLabel: "",
+                apiKeyHelp: "",
+                usernameLabel: "Username",
+                passwordLabel: "Admin Password",
+                showCredentials: true
+            )
+        )
+        ConnectorRegistry.shared.register(nighthawkDescriptor) { NightawkConnector(config: $0) }
     }
 }

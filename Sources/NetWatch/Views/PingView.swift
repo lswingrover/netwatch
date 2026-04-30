@@ -13,32 +13,41 @@ struct PingView: View {
 
     var body: some View {
         HSplitView {
-            // Left: target list
-            List(monitor.pingStates, selection: $selectedID) { ps in
-                PingListRow(state: ps)
-                    .tag(ps.id)
-                    .contextMenu {
-                        Button("Edit…") {
-                            editTarget = ps.target
+            // Left panel: list + footer add button
+            VStack(spacing: 0) {
+                List(monitor.pingStates, selection: $selectedID) { ps in
+                    PingListRow(state: ps)
+                        .tag(ps.id)
+                        .contextMenu {
+                            Button("Edit…") { editTarget = ps.target }
+                            Divider()
+                            Button("Delete", role: .destructive) {
+                                if selectedID == ps.id { selectedID = nil }
+                                monitor.settings.pingTargets.removeAll { $0.host == ps.target.host }
+                                monitor.restart()
+                            }
                         }
-                        Divider()
-                        Button("Delete", role: .destructive) {
-                            if selectedID == ps.id { selectedID = nil }
-                            monitor.settings.pingTargets.removeAll { $0.host == ps.target.host }
-                            monitor.restart()
-                        }
-                    }
-            }
-            .listStyle(.sidebar)
-            .frame(minWidth: 200, idealWidth: 240, maxWidth: 300)
-            .toolbar {
-                ToolbarItem {
-                    Button { showAddSheet = true } label: {
-                        Label("Add Target", systemImage: "plus")
-                    }
-                    .help("Add ping target")
                 }
+                .listStyle(.sidebar)
+
+                // macOS source-list footer — + button lives in the panel, not the toolbar
+                Divider()
+                HStack(spacing: 0) {
+                    Button { showAddSheet = true } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(width: 24, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add ping target  (⌘+N also works)")
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+                .frame(height: 28)
+                .background(Color(NSColor.windowBackgroundColor))
             }
+            .frame(minWidth: 200, idealWidth: 240, maxWidth: 300)
             .sheet(isPresented: $showAddSheet) {
                 PingTargetSheet(title: "Add Ping Target", host: "", label: "") { host, label in
                     monitor.settings.pingTargets.append(

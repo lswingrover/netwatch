@@ -13,9 +13,10 @@ class NetworkMonitorService: ObservableObject {
     @Published var isRunning: Bool = false
 
     // Sub-monitors (also ObservableObjects, observed by views)
-    let interfaceMonitor = InterfaceMonitor(interval: 1.0)
+    let interfaceMonitor  = InterfaceMonitor(interval: 1.0)
     let tracerouteMonitor = TracerouteMonitor(interval: 60.0)
-    let incidentManager: IncidentManager
+    let connectorManager  = ConnectorManager()
+    let incidentManager:  IncidentManager
 
     // MARK: - Private
 
@@ -48,6 +49,7 @@ class NetworkMonitorService: ObservableObject {
         dnsMonitors = []
         interfaceMonitor.stop()
         tracerouteMonitor.stop()
+        connectorManager.stop()
         failureWatcherTask?.cancel()
         failureWatcherTask = nil
     }
@@ -81,6 +83,9 @@ class NetworkMonitorService: ObservableObject {
         // Traceroute
         tracerouteMonitor.start(targets: settings.tracerouteTargets)
 
+        // Device connectors
+        connectorManager.load(configs: settings.connectorConfigs)
+
         // Failure watcher
         failureWatcherTask?.cancel()
         failureWatcherTask = Task {
@@ -94,6 +99,9 @@ class NetworkMonitorService: ObservableObject {
     // MARK: - Incident detection
 
     private func checkForIncidents() {
+        // Grab latest connector snapshots for enrichment
+        let connSnaps = connectorManager.allSnapshots
+
         // Count ping failures across recent window
         var failedTargets: [String] = []
         for ps in pingStates {
@@ -111,7 +119,8 @@ class NetworkMonitorService: ObservableObject {
                 subject: failedTargets.joined(separator: ", "),
                 pingStates: pingStates,
                 dnsStates: dnsStates,
-                traceroute: latestTraceroute
+                traceroute: latestTraceroute,
+                connectorSnapshots: connSnaps
             )
             return
         }
@@ -123,7 +132,8 @@ class NetworkMonitorService: ObservableObject {
                 subject: failed,
                 pingStates: pingStates,
                 dnsStates: dnsStates,
-                traceroute: latestTraceroute
+                traceroute: latestTraceroute,
+                connectorSnapshots: connSnaps
             )
         }
 
@@ -141,7 +151,8 @@ class NetworkMonitorService: ObservableObject {
                 subject: dnsFailDomains.joined(separator: ", "),
                 pingStates: pingStates,
                 dnsStates: dnsStates,
-                traceroute: nil
+                traceroute: nil,
+                connectorSnapshots: connSnaps
             )
         }
     }

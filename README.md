@@ -120,6 +120,61 @@ The popover shows live stats without switching windows — useful when you want 
 
 ---
 
+## Device Connectors
+
+NetWatch can pull live data directly from your network appliances and correlate it with ping/DNS failures. Connector data appears in the **Devices** tab and is automatically included in every incident bundle.
+
+### Built-in connectors
+
+**Firewalla (Gold / Purple / Blue+)**  
+Reads bandwidth usage, active security alarms, device flows, CPU, memory, and uptime from Firewalla's local REST API on port 8833.
+
+Setup: open Firewalla's mobile app → More → Settings → API Access → copy the **Box API Token**. Then in NetWatch → Settings → Connectors → enable Firewalla, enter your device's local IP, paste the token, and click **Test Connection**.
+
+**Netgear Nighthawk**  
+Reads WAN IP, uptime, daily traffic meter (RX/TX MB), and connection type from Netgear's SOAP API on port 5000.
+
+Setup: enter your router's local IP (usually `192.168.1.1`) and your admin password. NetWatch uses Basic auth over your LAN — the SOAP endpoint is only accessible locally.
+
+### Adding your own connector
+
+Any device with a local HTTP, SOAP, or SNMP API can be integrated. You don't need to touch any core files:
+
+1. Create a Swift class conforming to `DeviceConnector` — `FirewallaConnector.swift` is the reference (~170 lines).
+2. Define a `ConnectorDescriptor` with your device's metadata and help text.
+3. Register it in `NetWatchApp.swift` alongside the two built-in connectors.
+
+The connector automatically appears in the Devices tab and Preferences → Connectors, and its snapshot is written to every incident bundle as `connector_<id>.txt`.
+
+See `Sources/NetWatch/Connectors/ConnectorProtocol.swift` for the full protocol definition and `ConnectorRegistry.swift` for the registration API.
+
+---
+
+## NetWatch Diagnose — Claude skill
+
+A companion skill that uses Claude to diagnose network problems from your incident bundles and live connector data.
+
+```
+skill/SKILL.md       Claude skill instructions — the diagnostic logic
+skill/README.md      Installation guide
+```
+
+**What it does:** when you run the skill in Claude, it reads your most recent incident bundle, correlates connector data (Firewalla alarms, Nighthawk uptime/WAN IP), runs a root-cause chain analysis (WAN outage vs. router issue vs. DNS failure vs. local blip), and delivers a plain-English diagnosis with recommended next steps — including a pre-filled ISP escalation draft.
+
+**Install:**
+
+```bash
+# Copy to your Claude skills folder
+mkdir -p ~/Documents/Claude/skills/netwatch-diagnose
+cp skill/SKILL.md ~/Documents/Claude/skills/netwatch-diagnose/SKILL.md
+```
+
+Then in any Claude session: *"Run the netwatch-diagnose skill"* or *"Diagnose my last network outage using NetWatch."*
+
+See `skill/README.md` for detailed installation options (Cowork plugin, manual, API).
+
+---
+
 ## Architecture
 
 ```
@@ -135,18 +190,26 @@ Monitors/
   TracerouteMonitor.swift      @MainActor — cyclic traceroute runner
   IncidentManager.swift        @MainActor — cooldown-gated incident bundler + notifications
   NetworkMonitorService.swift  @MainActor — orchestrator, owns all monitors + settings
+Connectors/
+  ConnectorProtocol.swift      DeviceConnector protocol + ConnectorConfig/Snapshot/Metric/Event types
+  ConnectorRegistry.swift      Singleton factory — register and instantiate connectors by id
+  ConnectorManager.swift       @MainActor — 30s poll timer, sequential async polling with timeout
+  FirewallaConnector.swift     Firewalla local REST API (port 8833, Bearer token)
+  NightawkConnector.swift      Netgear SOAP API (port 5000, Basic auth, XML parsing)
 Views/
   ContentView.swift            NavigationSplitView sidebar + detail router
   OverviewView.swift           Status banner, stat cards, sparklines, summary tables
-  PingView.swift               Per-target RTT charts + results log
+  PingView.swift               Per-target RTT charts + inline add/edit/delete
   DNSView.swift                Per-domain query time charts + multi-resolver comparison
   TracerouteView.swift         Per-target hop table + RTT bar chart
+  ConnectorsView.swift         Device connector panel — live metrics, events, setup prompts
   IncidentsView.swift          Incident list + bundle reader + clipboard copy
   MenuBarStatusView.swift      Menu bar extra popover
-  PreferencesView.swift        Settings tabs (Targets / Thresholds / Storage)
+  PreferencesView.swift        Settings tabs (Targets / Thresholds / Connectors / Storage)
 support/Info.plist             App bundle metadata (CFBundleVersion, NSPrincipalClass, etc.)
 make_icon.swift                Standalone Swift script — renders AppIcon.icns via AppKit + iconutil
 build_app.sh                   One-shot build + sign + install + cache-nuke script
+skill/SKILL.md                 Claude companion skill — diagnoses incidents from bundle data
 ```
 
 ### Design decisions worth knowing about
@@ -167,7 +230,9 @@ build_app.sh                   One-shot build + sign + install + cache-nuke scri
 
 ## Install
 
-> **This repo is source code only — there is no pre-built download.** You build it yourself in about 30 seconds. The build script handles everything including icon generation, signing, and installing to `/Applications`.
+> **This repo contains source code only — there is no pre-built binary.** You build it yourself in about 30 seconds using the script below. The script handles compilation, icon generation, signing, and installing to `/Applications`.
+>
+> **If you previously downloaded `NetWatch-v1.3.1.zip` from the Releases page:** that unsigned binary was blocked by macOS Gatekeeper and has since been removed. Use the build script below instead — it takes the same 30 seconds and produces a properly signed app that works on first launch.
 
 ### Prerequisites
 
@@ -245,6 +310,7 @@ Open **NetWatch → Settings** (⌘,) or the **Monitor** menu.
 |-----|---------------------|
 | **Targets** | Ping hosts (IP or hostname + optional label), DNS domains, traceroute targets |
 | **Thresholds** | Ping/DNS intervals, consecutive-fail count before incident fires, incident cooldown |
+| **Connectors** | Enable/configure Firewalla, Nighthawk, or custom device connectors; test connection |
 | **Storage** | Base directory for logs/incidents, export/import JSON config |
 
 Default ping targets: Cloudflare (1.1.1.1), Google (8.8.8.8), Quad9 (9.9.9.9), OpenDNS (208.67.222.222), plus two Spectrum gateway IPs. Edit these to match your actual gateway (check `netstat -rn | grep default`) and whatever external hosts matter to you.

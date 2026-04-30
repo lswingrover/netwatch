@@ -256,6 +256,10 @@ struct MonitorSettings: Codable {
     var networkInterface: String = ""   // empty = auto-detect
     var baseDirectory: String = "~/network_tests"
 
+    /// Device connector configurations. One entry per registered connector;
+    /// the `enabled` flag controls whether ConnectorManager instantiates it.
+    var connectorConfigs: [ConnectorConfig] = []
+
     static let `default` = MonitorSettings()
 
     static func load() -> MonitorSettings {
@@ -268,6 +272,25 @@ struct MonitorSettings: Codable {
     func save() {
         if let data = try? JSONEncoder().encode(self) {
             UserDefaults.standard.set(data, forKey: "MonitorSettings")
+        }
+    }
+
+    /// Returns the config for a given connector id, creating a disabled default if absent.
+    mutating func connectorConfig(for id: String) -> ConnectorConfig {
+        if let existing = connectorConfigs.first(where: { $0.id == id }) {
+            return existing
+        }
+        let new = ConnectorConfig(id: id)
+        connectorConfigs.append(new)
+        return new
+    }
+
+    /// Upserts a connector config.
+    mutating func setConnectorConfig(_ config: ConnectorConfig) {
+        if let idx = connectorConfigs.firstIndex(where: { $0.id == config.id }) {
+            connectorConfigs[idx] = config
+        } else {
+            connectorConfigs.append(config)
         }
     }
 }

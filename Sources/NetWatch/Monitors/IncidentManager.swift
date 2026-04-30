@@ -17,22 +17,26 @@ class IncidentManager: ObservableObject {
     }
 
     /// Call from NetworkMonitorService when failure thresholds are breached.
+    /// `connectorSnapshots` is optional — pass whatever the ConnectorManager has at the moment.
     func considerIncident(reason: String, subject: String,
                           pingStates: [PingState], dnsStates: [DNSState],
-                          traceroute: TracerouteResult?) {
+                          traceroute: TracerouteResult?,
+                          connectorSnapshots: [ConnectorSnapshot] = []) {
         let now = Date()
         guard now.timeIntervalSince(lastIncidentTime) >= cooldown else { return }
         lastIncidentTime = now
         Task { await bundleIncident(reason: reason, subject: subject,
                                     pingStates: pingStates, dnsStates: dnsStates,
-                                    traceroute: traceroute) }
+                                    traceroute: traceroute,
+                                    connectorSnapshots: connectorSnapshots) }
     }
 
     // MARK: - Private
 
     private func bundleIncident(reason: String, subject: String,
                                 pingStates: [PingState], dnsStates: [DNSState],
-                                traceroute: TracerouteResult?) async {
+                                traceroute: TracerouteResult?,
+                                connectorSnapshots: [ConnectorSnapshot] = []) async {
         let ts = Self.timestamp()
         let dir = baseDir.appendingPathComponent("incidents/incident_\(ts)")
         do {
@@ -89,6 +93,27 @@ class IncidentManager: ObservableObject {
 
         try? summary.write(to: dir.appendingPathComponent("incident.txt"), atomically: true, encoding: .utf8)
         try? ticket.write(to: dir.appendingPathComponent("tier2_ticket.txt"), atomically: true, encoding: .utf8)
+
+        // Device connector snapshots — one file per connector
+        for snap in connectorSnapshots {
+            var lines = "=== \(snap.connectorName) — \(snap.timestamp) ===\n"
+            lines += "Summary: \(snap.summary)\n\n"
+            if !snap.metrics.isEmpty {
+                lines += "Metrics:\n"
+                for m in snap.metrics {
+                    lines += "  \(m.label.padding(toLength: 20, withPad: " ", startingAt: 0)) \(m.value) \(m.unit)  [\(m.severity.rawValue)]\n"
+                }
+            }
+            if !snap.events.isEmpty {
+                lines += "\nEvents:\n"
+                for e in snap.events {
+                    lines += "  [\(e.timestamp)] \(e.type.uppercased())  \(e.description)  [\(e.severity.rawValue)]\n"
+                }
+            }
+            let safeId = snap.connectorId.replacingOccurrences(of: "/", with: "_")
+            let file = dir.appendingPathComponent("connector_\(safeId).txt")
+            try? lines.write(to: file, atomically: true, encoding: .utf8)
+        }
 
         // Snapshot: recent ping histories
         for ps in pingStates {
