@@ -162,5 +162,5 @@ enum NetworkStatus {
     case healthy, degraded, critical
     var color: String { switch self { case .healthy: "green"; case .degraded: "yellow"; case .critical: "red" } }
     var label: String { switch self { case .healthy: "Healthy"; case .degraded: "Degraded"; case .critical: "Critical" } }
-    var systemImage: String { switch self { case .healthy: "wifi"; case .degraded: "wifi.exclamationmark"; case .critical: "wifi.slash" } }
+    var systemImage: String { switch self { case .healthy: "eye"; case .degraded: "eye.trianglebadge.exclamationmark"; case .critical: "eye.slash" } }
 }
