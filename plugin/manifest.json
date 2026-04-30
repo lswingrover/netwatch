@@ -1,0 +1,14 @@
+{
+  "name": "NetWatch",
+  "description": "Companion plugin for the NetWatch network monitoring app. Adds a diagnostic skill that reads incident bundles, correlates device connector data (Firewalla, Orbi, Nighthawk), and delivers plain-English root-cause analysis with ISP escalation drafts.",
+  "version": "1.0.0",
+  "author": "Louis Swingrover",
+  "homepage": "https://github.com/lswingrover/netwatch",
+  "skills": [
+    {
+      "name": "netwatch-diagnose",
+      "description": "Diagnose network incidents from NetWatch data. Checks if NetWatch is installed, reads the most recent incident bundle, correlates Firewalla/Orbi/Nighthawk connector snapshots, runs root-cause chain analysis (WAN outage vs router issue vs DNS failure vs local blip), and delivers recommended actions + a pre-filled ISP escalation draft. Trigger: 'diagnose my network', 'what happened to my internet', 'run NetWatch diagnose', 'why did my connection drop'.",
+      "enabled": true
+    }
+  ]
+}

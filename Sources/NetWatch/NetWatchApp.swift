@@ -128,7 +128,7 @@ struct NetWatchApp: App {
             id: "nighthawk",
             displayName: "Netgear Nighthawk",
             iconName: "wifi.router",
-            description: "WAN IP, uptime, traffic meter, and connection state from your Netgear Nighthawk router.",
+            description: "WAN IP, uptime, traffic meter, and connection state from your Netgear Nighthawk router (HTTP, port 5000).",
             vendor: "Netgear",
             docsURL: "https://github.com/lswingrover/NetWatch#nighthawk-connector",
             configHelp: ConnectorConfigHelp(
@@ -142,5 +142,25 @@ struct NetWatchApp: App {
             )
         )
         ConnectorRegistry.shared.register(nighthawkDescriptor) { NightawkConnector(config: $0) }
+
+        // ── Netgear Orbi ──────────────────────────────────────────────────────
+        let orbiDescriptor = ConnectorDescriptor(
+            id: "orbi",
+            displayName: "Netgear Orbi",
+            iconName: "wifi.router.fill",
+            description: "WAN IP, uptime, traffic meter, and WAN status from your Netgear Orbi mesh system (HTTPS, port 443).",
+            vendor: "Netgear",
+            docsURL: "https://github.com/lswingrover/NetWatch#orbi-connector",
+            configHelp: ConnectorConfigHelp(
+                hostPlaceholder: "192.168.40.161",
+                hostHelp: "Local IP of your Orbi router (not satellite)",
+                apiKeyLabel: "",
+                apiKeyHelp: "",
+                usernameLabel: "Username",
+                passwordLabel: "Admin Password",
+                showCredentials: true
+            )
+        )
+        ConnectorRegistry.shared.register(orbiDescriptor) { OrbiConnector(config: $0) }
     }
 }
