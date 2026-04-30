@@ -129,7 +129,20 @@ killall Dock   2>/dev/null || true
 sleep 2
 echo "✅  Registered + icon cache nuked"
 
-# ── 7. Launch ─────────────────────────────────────────────────────────────────
+# ── 7. Force icon via NSWorkspace (beats Dock cache) ──────────────────────────
+echo ""
+echo "▶ Setting icon via NSWorkspace..."
+swift -e "
+import AppKit
+let path = \"$INSTALL_DIR/$APP_BUNDLE\"
+let icns = path + \"/Contents/Resources/AppIcon.icns\"
+if let icon = NSImage(contentsOfFile: icns) {
+    let ok = NSWorkspace.shared.setIcon(icon, forFile: path, options: [])
+    print(ok ? \"✅  NSWorkspace.setIcon succeeded\" : \"⚠️   NSWorkspace.setIcon returned false\")
+} else { print(\"⚠️   AppIcon.icns not found\") }
+" 2>/dev/null || echo "⚠️   swift -e unavailable — skipping"
+
+# ── 8. Launch ─────────────────────────────────────────────────────────────────
 echo ""
 echo "▶ Launching $APP_NAME..."
 open "$INSTALL_DIR/$APP_BUNDLE"
