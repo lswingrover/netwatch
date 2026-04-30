@@ -90,7 +90,7 @@ final class ConnectorManager: ObservableObject {
         for connector in connectors {
             guard !Task.isCancelled else { break }
             do {
-                let snapshot = try await withTimeout(seconds: 12) {
+                let snapshot = try await withTimeout(seconds: 20) {
                     try await connector.fetchSnapshot()
                 }
                 snapshots[connector.id] = snapshot

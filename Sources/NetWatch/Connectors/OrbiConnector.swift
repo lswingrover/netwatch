@@ -1,25 +1,19 @@
 /// OrbiConnector.swift — NetWatch connector for Netgear Orbi mesh systems
 ///
-/// Talks to the Netgear SOAP API exposed by Orbi satellites and routers over
-/// HTTPS. Unlike older Nighthawk models (which use HTTP on port 5000), Orbi
-/// firmware v7.x exposes the SOAP endpoint exclusively on HTTPS port 443 with
-/// a self-signed certificate.
+/// Uses the Netgear SOAP API on HTTPS/443. Tested on RBRE960 firmware V7.2.8.2.
 ///
-/// Prerequisites on your Orbi:
-///   1. Log in to http://orbilogin.net → Settings → Administration
-///   2. Note your admin password — that's the only credential needed.
-///   3. The SOAP endpoint is always-on; no extra setting to enable.
+/// Auth flow (firmware ≥ v7 / LoginMethod=2.0):
+///   1. POST SOAPLogin to DeviceConfig:1 with Username + Password
+///   2. Capture `Set-Cookie: sess_id=...` from the response
+///   3. Include that cookie in all subsequent SOAP requests
+///
+/// Key differences from older Nighthawk / HTTP-5000 connectors:
+///   - Content-Type must be `multipart/form-data` (not `text/xml`)
+///   - SOAP envelope namespace declarations differ slightly
+///   - Traffic meter lives in DeviceConfig:1, NOT in a TrafficMeter service
+///   - WAN IP is in WANIPConnection:1#GetInfo (key: NewExternalIPAddress)
 ///
 /// SOAP endpoint: https://<orbi-ip>/soap/server_sa/
-/// Service URN:   urn:NETGEAR-ROUTER:service:DeviceInfo:1
-///
-/// This connector uses a URLSession with a custom delegate to accept the Orbi's
-/// self-signed TLS certificate (only for the configured local IP — not globally
-/// disabled). This is safe for LAN-only access because you're connecting to a
-/// known, physically-local device that you control.
-///
-/// Tested on: Orbi RBRE960 (WiFi 6E), SOAP version 3.46
-/// Should also work on: RBR760, RBR860, and most Orbi Pro models.
 
 import Foundation
 
@@ -40,6 +34,9 @@ final class OrbiConnector: DeviceConnector {
     private(set) var lastError:    String? = nil
     private(set) var lastSnapshot: ConnectorSnapshot? = nil
 
+    /// Session cookie obtained from SOAPLogin. Cleared on auth error.
+    private var sessionCookie: String? = nil
+
     // MARK: - Init
 
     init(config: ConnectorConfig = ConnectorConfig(id: "orbi")) {
@@ -49,14 +46,16 @@ final class OrbiConnector: DeviceConnector {
     // MARK: - DeviceConnector
 
     func configure(_ config: ConnectorConfig) {
-        self.config = config
+        self.config  = config
+        sessionCookie = nil   // force re-login on config change
     }
 
     func testConnection() async -> Result<String, Error> {
         do {
-            let info = try await soapAction("GetInfo", service: "DeviceInfo")
-            let model    = info["ModelName"]       ?? "Orbi"
-            let firmware = info["Firmwareversion"]  ?? info["FirmwareVersion"] ?? "unknown"
+            try await ensureLoggedIn()
+            let info = try await soapAction("GetInfo", service: "DeviceInfo:1")
+            let model    = info["ModelName"]      ?? "Orbi"
+            let firmware = info["Firmwareversion"] ?? info["FirmwareVersion"] ?? "unknown"
             return .success("\(model) · FW \(firmware)")
         } catch {
             return .failure(error)
@@ -64,57 +63,81 @@ final class OrbiConnector: DeviceConnector {
     }
 
     func fetchSnapshot() async throws -> ConnectorSnapshot {
-        // Fetch in parallel; tolerate partial failures (not all Orbi models support all actions)
-        async let infoResult    = optionalSOAP("GetInfo",                   service: "DeviceInfo")
-        async let trafficResult = optionalSOAP("GetTrafficMeterStatistics", service: "TrafficMeter")
+        try await ensureLoggedIn()
 
-        let (info, traffic) = await (infoResult, trafficResult)
+        // Fetch in parallel; tolerate partial failures
+        async let infoResult    = optionalSOAP("GetInfo",                    service: "DeviceInfo:1")
+        async let wanResult     = optionalSOAP("GetInfo",                    service: "WANIPConnection:1")
+        async let trafficResult = optionalSOAP("GetTrafficMeterStatistics",  service: "DeviceConfig:1")
+        async let sysResult     = optionalSOAP("GetSystemInfo",              service: "DeviceInfo:1")
+
+        let (info, wan, traffic, sys) = await (infoResult, wanResult, trafficResult, sysResult)
 
         // ── Metrics ──────────────────────────────────────────────────────────
 
         var metrics: [ConnectorMetric] = []
 
-        if let info {
-            // Uptime — Orbi returns it in the same "X days Y hours Z minutes" format
-            if let uptime = uptimeSeconds(from: info["Uptime"] ?? "") {
-                metrics.append(ConnectorMetric(
-                    key: "uptime_h", label: "Uptime",
-                    value: uptime / 3600, unit: "h"))
-            }
-            if let wanIP = info["ExternalIPAddress"], !wanIP.isEmpty {
+        if let wan {
+            if let wanIP = wan["NewExternalIPAddress"], !wanIP.isEmpty {
                 metrics.append(ConnectorMetric(
                     key: "wan_ip", label: "WAN IP",
                     value: 0, unit: wanIP))
             }
-            if let connType = info["ConnectionType"] {
+            if let connType = wan["NewConnectionType"] ?? wan["NewAddressingType"] {
                 metrics.append(ConnectorMetric(
                     key: "conn_type", label: "Connection",
                     value: 0, unit: connType))
             }
-            // Orbi-specific: internet connection status
-            if let status = info["ConnectionStatus"] ?? info["InternetConnectionStatus"] {
-                let sev: MetricSeverity = status.lowercased().contains("connected") ? .ok : .warning
+            // WANIPConnection Enable = 1 means WAN is up
+            if let enable = wan["NewEnable"] {
+                let up  = enable == "1"
+                let sev: MetricSeverity = up ? .ok : .warning
                 metrics.append(ConnectorMetric(
                     key: "wan_status", label: "WAN Status",
-                    value: 0, unit: status, severity: sev))
+                    value: 0, unit: up ? "Connected" : "Disconnected", severity: sev))
             }
         }
 
         if let traffic {
-            if let rxStr = traffic["TodayDownload"], let rx = Double(rxStr) {
+            // Traffic meter stores doubles in "X.XX" format; some fields use "X.XX/X.XX"
+            func mb(_ raw: String?) -> Double? {
+                guard let s = raw?.components(separatedBy: "/").first else { return nil }
+                return Double(s.trimmingCharacters(in: .whitespaces))
+            }
+            if let rx = mb(traffic["NewTodayDownload"]) {
                 metrics.append(ConnectorMetric(
                     key: "today_rx_mb", label: "Today RX",
                     value: rx, unit: "MB"))
             }
-            if let txStr = traffic["TodayUpload"], let tx = Double(txStr) {
+            if let tx = mb(traffic["NewTodayUpload"]) {
                 metrics.append(ConnectorMetric(
                     key: "today_tx_mb", label: "Today TX",
                     value: tx, unit: "MB"))
             }
-            if let weekRxStr = traffic["WeekDownload"], let weekRx = Double(weekRxStr) {
+            if let weekRx = mb(traffic["NewWeekDownload"]) {
                 metrics.append(ConnectorMetric(
                     key: "week_rx_mb", label: "Week RX",
                     value: weekRx, unit: "MB"))
+            }
+            if let weekTx = mb(traffic["NewWeekUpload"]) {
+                metrics.append(ConnectorMetric(
+                    key: "week_tx_mb", label: "Week TX",
+                    value: weekTx, unit: "MB"))
+            }
+        }
+
+        if let sys {
+            if let cpuStr = sys["NewCPUUtilization"], let cpu = Double(cpuStr) {
+                let sev: MetricSeverity = cpu > 90 ? .warning : .ok
+                metrics.append(ConnectorMetric(
+                    key: "cpu_pct", label: "CPU",
+                    value: cpu, unit: "%", severity: sev))
+            }
+            if let memStr = sys["NewMemoryUtilization"], let mem = Double(memStr) {
+                let sev: MetricSeverity = mem > 85 ? .warning : .ok
+                metrics.append(ConnectorMetric(
+                    key: "mem_pct", label: "Memory",
+                    value: mem, unit: "%", severity: sev))
             }
         }
 
@@ -122,16 +145,7 @@ final class OrbiConnector: DeviceConnector {
 
         var events: [ConnectorEvent] = []
 
-        if let uptimeMetric = metrics.first(where: { $0.key == "uptime_h" }),
-           uptimeMetric.value < (5.0 / 60.0) {
-            events.append(ConnectorEvent(
-                timestamp: Date(),
-                type: "reboot",
-                description: "Orbi recently rebooted (uptime < 5 minutes)",
-                severity: .warning))
-        }
-
-        // Flag if WAN is not connected
+        // Flag if WAN is down
         if let statusMetric = metrics.first(where: { $0.key == "wan_status" }),
            statusMetric.severity == .warning {
             events.append(ConnectorEvent(
@@ -141,11 +155,22 @@ final class OrbiConnector: DeviceConnector {
                 severity: .critical))
         }
 
+        // Flag high CPU
+        if let cpuMetric = metrics.first(where: { $0.key == "cpu_pct" }),
+           cpuMetric.severity == .warning {
+            events.append(ConnectorEvent(
+                timestamp: Date(),
+                type: "high_cpu",
+                description: "Orbi CPU at \(Int(cpuMetric.value))%",
+                severity: .warning))
+        }
+
         // ── Summary ──────────────────────────────────────────────────────────
 
         let model   = info?["ModelName"] ?? "Orbi"
-        let wanIP   = info?["ExternalIPAddress"] ?? "–"
-        let todayRX = metrics.first { $0.key == "today_rx_mb" }.map { String(format: "%.0f", $0.value) } ?? "–"
+        let wanIP   = metrics.first(where: { $0.key == "wan_ip"      })?.unit ?? "–"
+        let todayRX = metrics.first(where: { $0.key == "today_rx_mb" })
+                             .map { String(format: "%.0f", $0.value) } ?? "–"
         let summary = "\(model) · WAN \(wanIP) · Today RX \(todayRX) MB"
 
         let snapshot = ConnectorSnapshot(
@@ -158,59 +183,129 @@ final class OrbiConnector: DeviceConnector {
         return snapshot
     }
 
-    // MARK: - SOAP (HTTPS)
+    // MARK: - Auth
+
+    /// Ensure we have a valid session cookie. Calls SOAPLogin if needed.
+    private func ensureLoggedIn() async throws {
+        guard sessionCookie == nil else { return }
+
+        let serviceURN = "urn:NETGEAR-ROUTER:service:DeviceConfig:1"
+        let user = config.username.isEmpty ? "admin" : config.username
+
+        let body = soapEnvelope(action: "SOAPLogin", serviceURN: serviceURN,
+                                 params: "<Username>\(user)</Username>\n<Password>\(config.password)</Password>")
+
+        var req = URLRequest(url: soapURL)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 8
+        req.setValue("multipart/form-data",                  forHTTPHeaderField: "Content-Type")
+        req.setValue("\(serviceURN)#SOAPLogin",              forHTTPHeaderField: "SOAPAction")
+        req.setValue("pynetgear",                             forHTTPHeaderField: "User-Agent")
+        req.setValue("no-cache",                              forHTTPHeaderField: "Cache-Control")
+        req.httpBody = Data(body.utf8)
+
+        let (_, response) = try await selfSignedSession.data(for: req)
+        guard let http = response as? HTTPURLResponse else {
+            throw ConnectorError.httpError(0)
+        }
+        guard http.statusCode == 200 else {
+            isConnected = false
+            throw ConnectorError.httpError(http.statusCode)
+        }
+
+        // Extract the session cookie
+        let allHeaders = http.allHeaderFields
+        if let setCookie = allHeaders["Set-Cookie"] as? String {
+            // Keep only the sess_id=... portion (strip SameSite/HttpOnly flags)
+            let cookieVal = setCookie.components(separatedBy: ";").first?.trimmingCharacters(in: .whitespaces) ?? ""
+            if !cookieVal.isEmpty {
+                sessionCookie = cookieVal
+                return
+            }
+        }
+        // Some URLSession implementations coalesce Set-Cookie
+        // fallback: look for sess_id in any header
+        for (key, value) in allHeaders {
+            if let k = key as? String, k.lowercased() == "set-cookie",
+               let v = value as? String, v.hasPrefix("sess_id=") {
+                sessionCookie = v.components(separatedBy: ";").first
+                return
+            }
+        }
+
+        throw ConnectorError.parseError("SOAPLogin succeeded (HTTP 200) but no Set-Cookie header")
+    }
+
+    // MARK: - SOAP
 
     private var soapURL: URL {
         let host = config.host.isEmpty ? "192.168.40.161" : config.host
-        // Orbi exposes SOAP on HTTPS/443. Override with config.port if needed.
         let port = config.port > 0 ? config.port : 443
         return URL(string: "https://\(host):\(port)/soap/server_sa/")!
     }
 
-    private var authHeader: String {
-        let user    = config.username.isEmpty ? "admin" : config.username
-        let encoded = Data("\(user):\(config.password)".utf8).base64EncodedString()
-        return "Basic \(encoded)"
+    /// Build the SOAP envelope in pynetgear's format (different namespace declarations
+    /// from the standard that Netgear v7 firmware actually accepts).
+    private func soapEnvelope(action: String, serviceURN: String, params: String) -> String {
+        return """
+        <?xml version="1.0" encoding="utf-8" standalone="no"?>
+        <SOAP-ENV:Envelope xmlns:SOAPSDK1="http://www.w3.org/2001/XMLSchema"
+          xmlns:SOAPSDK2="http://www.w3.org/2001/XMLSchema-instance"
+          xmlns:SOAPSDK3="http://schemas.xmlsoap.org/soap/encoding/"
+          xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
+        <SOAP-ENV:Header>
+        <SessionID>A7D88AE69687E58D9A00</SessionID>
+        </SOAP-ENV:Header>
+        <SOAP-ENV:Body>
+        <M1:\(action) xmlns:M1="\(serviceURN)">
+        \(params)</M1:\(action)>
+        </SOAP-ENV:Body>
+        </SOAP-ENV:Envelope>
+        """
     }
 
     private func soapAction(_ action: String, service: String) async throws -> [String: String] {
-        let serviceURN = "urn:NETGEAR-ROUTER:service:\(service):1"
-        let body = """
-        <?xml version="1.0"?>
-        <SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/">
-          <SOAP-ENV:Header>
-            <SessionID>A7D88AE69687E58D9A00</SessionID>
-          </SOAP-ENV:Header>
-          <SOAP-ENV:Body>
-            <M1:\(action) xmlns:M1="\(serviceURN)"/>
-          </SOAP-ENV:Body>
-        </SOAP-ENV:Envelope>
-        """
+        let serviceURN = "urn:NETGEAR-ROUTER:service:\(service)"
+        let body = soapEnvelope(action: action, serviceURN: serviceURN, params: "")
+
         var req = URLRequest(url: soapURL)
         req.httpMethod = "POST"
-        req.timeoutInterval = 10
-        req.setValue("text/xml; charset=\"utf-8\"", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 7
+        req.setValue("multipart/form-data",          forHTTPHeaderField: "Content-Type")
         req.setValue("\(serviceURN)#\(action)",       forHTTPHeaderField: "SOAPAction")
-        req.setValue(authHeader,                       forHTTPHeaderField: "Authorization")
+        req.setValue("pynetgear",                      forHTTPHeaderField: "User-Agent")
+        req.setValue("no-cache",                       forHTTPHeaderField: "Cache-Control")
+        if let cookie = sessionCookie {
+            req.setValue(cookie,                       forHTTPHeaderField: "Cookie")
+        }
         req.httpBody = Data(body.utf8)
 
-        // Use the self-signed-cert-accepting session
-        let session = selfSignedSession
-        let (data, response) = try await session.data(for: req)
+        let (data, response) = try await selfSignedSession.data(for: req)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             isConnected = false
             lastError   = "HTTP \(code) for SOAP action \(action)"
             throw ConnectorError.httpError(code)
         }
-        return parseSOAPResponse(data)
+
+        let parsed = parseSOAPResponse(data)
+
+        // A SOAP body ResponseCode 401 means our session expired → invalidate + retry once
+        if parsed["ResponseCode"] == "401" {
+            sessionCookie = nil
+            isConnected   = false
+            lastError     = "Session expired (SOAP 401)"
+            throw ConnectorError.parseError("SOAP session expired — will re-login on next poll")
+        }
+
+        return parsed
     }
 
     private func optionalSOAP(_ action: String, service: String) async -> [String: String]? {
         try? await soapAction(action, service: service)
     }
 
-    /// Minimal SOAP response parser — identical to NightawkConnector.
+    /// Flat XML leaf-node parser — handles Netgear's single-level SOAP responses.
     private func parseSOAPResponse(_ data: Data) -> [String: String] {
         guard let xml = String(data: data, encoding: .utf8) else { return [:] }
         var result: [String: String] = [:]
@@ -229,39 +324,23 @@ final class OrbiConnector: DeviceConnector {
         return result
     }
 
-    private func uptimeSeconds(from string: String) -> TimeInterval? {
-        var total: TimeInterval = 0
-        let units: [(String, TimeInterval)] = [
-            ("day",    86400), ("hour",   3600),
-            ("minute", 60),    ("second", 1)
-        ]
-        let words = string.lowercased().components(separatedBy: .whitespaces)
-        for (idx, word) in words.enumerated() {
-            if let n = Double(word), idx + 1 < words.count {
-                let unit = words[idx + 1]
-                for (name, multiplier) in units where unit.hasPrefix(name) {
-                    total += n * multiplier
-                }
-            }
-        }
-        return total > 0 ? total : nil
-    }
-
     // MARK: - Self-signed TLS
 
-    /// A URLSession that accepts the Orbi's self-signed LAN certificate.
-    /// This is scoped to local network requests and does not disable global TLS validation.
     private lazy var selfSignedSession: URLSession = {
-        let delegate = SelfSignedDelegate()
-        return URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        // Disable automatic cookie storage so Set-Cookie headers remain
+        // visible in HTTPURLResponse.allHeaderFields — otherwise URLSession
+        // silently consumes them before we can extract the sess_id value.
+        let config = URLSessionConfiguration.default
+        config.httpCookieAcceptPolicy = .never
+        config.httpShouldSetCookies   = false
+        return URLSession(configuration: config,
+                          delegate: SelfSignedDelegate(),
+                          delegateQueue: nil)
     }()
 }
 
 // MARK: - Self-Signed Certificate Delegate
 
-/// Accepts self-signed certificates for LAN connections to known local devices.
-/// Only bypasses certificate validation — authentication, encryption, and
-/// data integrity are all still enforced by TLS.
 private final class SelfSignedDelegate: NSObject, URLSessionDelegate {
     func urlSession(_ session: URLSession,
                     didReceive challenge: URLAuthenticationChallenge,
@@ -272,7 +351,6 @@ private final class SelfSignedDelegate: NSObject, URLSessionDelegate {
             completionHandler(.performDefaultHandling, nil)
             return
         }
-        // Accept the self-signed certificate for this local host
         completionHandler(.useCredential, URLCredential(trust: serverTrust))
     }
 }
