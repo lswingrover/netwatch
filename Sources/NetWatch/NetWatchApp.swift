@@ -123,25 +123,25 @@ struct NetWatchApp: App {
         )
         ConnectorRegistry.shared.register(firewallaDescriptor) { FirewallaConnector(config: $0) }
 
-        // ── Netgear Nighthawk ─────────────────────────────────────────────────
-        let nighthawkDescriptor = ConnectorDescriptor(
-            id: "nighthawk",
-            displayName: "Netgear Nighthawk",
-            iconName: "wifi.router",
-            description: "WAN IP, uptime, traffic meter, and connection state from your Netgear Nighthawk router (HTTP, port 5000).",
+        // ── Netgear CM3000 cable modem ────────────────────────────────────────
+        let cm3000Descriptor = ConnectorDescriptor(
+            id: "cm3000",
+            displayName: "Netgear CM3000",
+            iconName: "cable.connector.horizontal",
+            description: "DOCSIS downstream/upstream signal quality (SNR, power levels), channel counts, startup status, and error events from your Netgear CM3000 cable modem via SSH tunnel.",
             vendor: "Netgear",
-            docsURL: "https://github.com/lswingrover/NetWatch#nighthawk-connector",
+            docsURL: "https://github.com/lswingrover/NetWatch#cm3000-connector",
             configHelp: ConnectorConfigHelp(
-                hostPlaceholder: "192.168.1.1",
-                hostHelp: "Local IP of your Nighthawk (usually 192.168.1.1)",
+                hostPlaceholder: "Leave blank (reads from ~/.env)",
+                hostHelp: "Optional: path to snapshot script. Credentials read from ~/.env — FIREWALLA_SSH_PASS_UUID (Firewalla SSH) and CM3000_1PASS_ITEM (modem admin password). Modem is reached via SSH tunnel through Firewalla.",
                 apiKeyLabel: "",
                 apiKeyHelp: "",
-                usernameLabel: "Username",
-                passwordLabel: "Admin Password",
-                showCredentials: true
+                usernameLabel: "",
+                passwordLabel: "",
+                showCredentials: false
             )
         )
-        ConnectorRegistry.shared.register(nighthawkDescriptor) { NightawkConnector(config: $0) }
+        ConnectorRegistry.shared.register(cm3000Descriptor) { CM3000Connector(config: $0) }
 
         // ── Netgear Orbi ──────────────────────────────────────────────────────
         let orbiDescriptor = ConnectorDescriptor(

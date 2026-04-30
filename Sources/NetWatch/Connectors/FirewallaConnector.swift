@@ -232,6 +232,11 @@ final class FirewallaConnector: DeviceConnector {
     }
 
     /// Async wrapper around Process + Pipe.
+    ///
+    /// Uses a `resumeOnce` gate (NSLock + Bool flag) to prevent the double-resume
+    /// crash that occurs when the timeout fires first, calls process.terminate(),
+    /// and then the terminationHandler also fires — both trying to resume the same
+    /// CheckedContinuation. Only the first resume wins; subsequent ones are no-ops.
     private func runProcess(executable: String, arguments: [String], timeoutSec: Double) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
@@ -243,13 +248,31 @@ final class FirewallaConnector: DeviceConnector {
             process.standardOutput = stdoutPipe
             process.standardError  = stderrPipe
 
-            // Timeout watchdog
+            // ── Once-only resume gate ──────────────────────────────────────
+            // Both the timeout handler and the terminationHandler can fire for
+            // the same process run (timeout → terminate() → terminationHandler).
+            // Gate ensures continuation.resume is called exactly once.
+            let lock    = NSLock()
+            var resumed = false
+
+            func resumeOnce(_ result: Result<String, Error>) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !resumed else { return }
+                resumed = true
+                switch result {
+                case .success(let v): continuation.resume(returning: v)
+                case .failure(let e): continuation.resume(throwing: e)
+                }
+            }
+
+            // ── Timeout watchdog ──────────────────────────────────────────
             let timer = DispatchSource.makeTimerSource(queue: .global())
             timer.schedule(deadline: .now() + timeoutSec)
             timer.setEventHandler {
                 process.terminate()
                 timer.cancel()
-                continuation.resume(throwing: ConnectorError.parseError("Snapshot script timed out"))
+                resumeOnce(.failure(ConnectorError.parseError("Snapshot script timed out after \(Int(timeoutSec))s")))
             }
             timer.resume()
 
@@ -258,16 +281,16 @@ final class FirewallaConnector: DeviceConnector {
                 let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
                                    encoding: .utf8) ?? ""
                 if process.terminationStatus == 0 {
-                    continuation.resume(returning: stdout)
+                    resumeOnce(.success(stdout))
                 } else {
                     let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
                                       encoding: .utf8) ?? ""
                     let msg = stdout.isEmpty ? stderr : stdout
-                    continuation.resume(throwing: ConnectorError.parseError(
+                    resumeOnce(.failure(ConnectorError.parseError(
                         msg.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             ? "Script exited \(process.terminationStatus)"
                             : msg.trimmingCharacters(in: .whitespacesAndNewlines)
-                    ))
+                    )))
                 }
             }
 
@@ -275,7 +298,7 @@ final class FirewallaConnector: DeviceConnector {
                 try process.run()
             } catch {
                 timer.cancel()
-                continuation.resume(throwing: error)
+                resumeOnce(.failure(error))
             }
         }
     }
