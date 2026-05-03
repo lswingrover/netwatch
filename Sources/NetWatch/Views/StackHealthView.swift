@@ -220,7 +220,7 @@ struct StackHealthView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Description (optional)")
                     .font(.caption).foregroundStyle(.secondary)
-                TextField("e.g. "Streaming buffering on Sonos", "VPN dropped", …", text: $reportNote)
+                TextField("e.g. Streaming buffering on Sonos, VPN dropped…", text: $reportNote)
                     .textFieldStyle(.roundedBorder)
             }
 

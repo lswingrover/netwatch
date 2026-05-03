@@ -225,18 +225,36 @@ class NetworkMonitorService: ObservableObject {
             )
         }
 
-        // Health provider: overall network health
+        // Health provider: full stack diagnosis via StackDiagnosisEngine
         apiServer.healthProvider = { [weak self] in
             guard let self else {
                 return APIHealthPayload(score: 0, status: "unknown", timestamp: "", layers: [:])
             }
-            let status = self.overallStatus
-            let iso    = ISO8601DateFormatter().string(from: Date())
+            let traceroute = self.tracerouteMonitor.results.values.first
+            let diagnosis  = StackDiagnosisEngine.diagnose(
+                pingStates:  self.pingStates,
+                dnsStates:   self.dnsStates,
+                traceroute:  traceroute,
+                snapshots:   self.connectorManager.allSnapshots
+            )
+            let iso = ISO8601DateFormatter().string(from: Date())
+            let statusStr: String = {
+                switch diagnosis.healthScore {
+                case 85...: return "healthy"
+                case 60..<85: return "degraded"
+                default: return "critical"
+                }
+            }()
+            let layerMap = Dictionary(
+                uniqueKeysWithValues: diagnosis.layerResults.map { lr in
+                    (lr.layer.rawValue, lr.status.rawValue)
+                }
+            )
             return APIHealthPayload(
-                score:     status == .healthy ? 90 : status == .degraded ? 60 : 20,
-                status:    status == .healthy ? "healthy" : status == .degraded ? "degraded" : "critical",
+                score:     diagnosis.healthScore,
+                status:    statusStr,
                 timestamp: iso,
-                layers:    [:]   // TODO: wire StackDiagnosisEngine in a future sprint
+                layers:    layerMap
             )
         }
 

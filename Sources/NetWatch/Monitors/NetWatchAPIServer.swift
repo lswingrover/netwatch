@@ -115,18 +115,24 @@ final class NetWatchAPIServer {
         }
 
         listener?.newConnectionHandler = { [weak self] connection in
-            self?.acceptConnection(connection)
+            // NWListener callbacks run on its queue — hop to MainActor
+            Task { @MainActor [weak self] in
+                self?.acceptConnection(connection)
+            }
         }
 
         listener?.stateUpdateHandler = { [weak self] state in
-            switch state {
-            case .ready:
-                self?.isRunning = true
-                print("[NetWatchAPI] Listening on :\(self?.port ?? 0)")
-            case .failed(let error):
-                self?.isRunning = false
-                print("[NetWatchAPI] Listener failed: \(error)")
-            default: break
+            // NWListener callbacks run on its queue — hop to MainActor
+            Task { @MainActor [weak self] in
+                switch state {
+                case .ready:
+                    self?.isRunning = true
+                    print("[NetWatchAPI] Listening on :\(self?.port ?? 0)")
+                case .failed(let error):
+                    self?.isRunning = false
+                    print("[NetWatchAPI] Listener failed: \(error)")
+                default: break
+                }
             }
         }
 
