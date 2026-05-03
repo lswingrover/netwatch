@@ -17,6 +17,46 @@
 
 import Foundation
 
+// MARK: - Data models
+
+struct OrbiSatellite: Identifiable, Equatable {
+    var id: String { mac }
+    let mac:          String
+    let name:         String
+    let ip:           String
+    let backhaulBand: String   // "5", "6", or "" = wired/unknown
+    let clientCount:  Int
+    let isOnline:     Bool
+
+    var backhaulLabel: String {
+        if backhaulBand.contains("6") { return "6 GHz" }
+        if backhaulBand.contains("5") { return "5 GHz" }
+        if backhaulBand == "eth" || backhaulBand == "wired" { return "Wired" }
+        return backhaulBand.isEmpty ? "Wireless" : backhaulBand
+    }
+    var backhaulIcon: String {
+        if backhaulBand == "eth" || backhaulBand == "wired" { return "cable.connector.horizontal" }
+        if backhaulBand.contains("6") { return "wifi" }
+        return "wifi"
+    }
+}
+
+struct OrbiRouterSummary {
+    var model:        String = "Orbi"
+    var firmware:     String = ""
+    var wanIP:        String = ""
+    var wanStatus:    String = ""
+    var wanConnected: Bool   = false
+    var cpuPct:       Double?
+    var memPct:       Double?
+    var totalClients: Int    = 0
+    var todayRXmb:    Double?
+    var todayTXmb:    Double?
+    var weekRXmb:     Double?
+    var guestEnabled: Bool   = false
+    var firmwareUpdate: String = ""   // non-empty = update available
+}
+
 // MARK: - Connector
 
 final class OrbiConnector: DeviceConnector {
@@ -33,6 +73,12 @@ final class OrbiConnector: DeviceConnector {
     private(set) var isConnected:  Bool    = false
     private(set) var lastError:    String? = nil
     private(set) var lastSnapshot: ConnectorSnapshot? = nil
+
+    /// Parsed satellite node list from last successful snapshot.
+    private(set) var lastSatellites: [OrbiSatellite] = []
+
+    /// Parsed router summary from last successful snapshot.
+    private(set) var lastRouterSummary: OrbiRouterSummary = OrbiRouterSummary()
 
     /// Session cookie obtained from SOAPLogin. Cleared on auth error.
     private var sessionCookie: String? = nil
@@ -66,12 +112,18 @@ final class OrbiConnector: DeviceConnector {
         try await ensureLoggedIn()
 
         // Fetch in parallel; tolerate partial failures
-        async let infoResult    = optionalSOAP("GetInfo",                    service: "DeviceInfo:1")
-        async let wanResult     = optionalSOAP("GetInfo",                    service: "WANIPConnection:1")
-        async let trafficResult = optionalSOAP("GetTrafficMeterStatistics",  service: "DeviceConfig:1")
-        async let sysResult     = optionalSOAP("GetSystemInfo",              service: "DeviceInfo:1")
+        async let infoResult       = optionalSOAP("GetInfo",                    service: "DeviceInfo:1")
+        async let wanResult        = optionalSOAP("GetInfo",                    service: "WANIPConnection:1")
+        async let trafficResult    = optionalSOAP("GetTrafficMeterStatistics",  service: "DeviceConfig:1")
+        async let sysResult        = optionalSOAP("GetSystemInfo",              service: "DeviceInfo:1")
+        async let rawAttach2Result = optionalRawSOAP("GetAttachDevice2",        service: "DeviceInfo:1")
+        async let guestResult      = optionalSOAP("GetGuestAccessEnabled",      service: "WLANConfiguration:1")
+        async let newFWResult      = optionalSOAP("GetNewFirmware",             service: "DeviceConfig:1")
 
-        let (info, wan, traffic, sys) = await (infoResult, wanResult, trafficResult, sysResult)
+        let (info, wan, traffic, sys, rawAttach2, guest, newFW) = await (
+            infoResult, wanResult, trafficResult, sysResult,
+            rawAttach2Result, guestResult, newFWResult
+        )
 
         // ── Metrics ──────────────────────────────────────────────────────────
 
@@ -127,7 +179,8 @@ final class OrbiConnector: DeviceConnector {
         }
 
         if let sys {
-            if let cpuStr = sys["NewCPUUtilization"], let cpu = Double(cpuStr) {
+            if let cpuStr = sys["NewCPUUtilization"], let cpu = Double(cpuStr),
+               cpu < 100 {   // 100 is a firmware sentinel meaning "not available" on RBRE960
                 let sev: MetricSeverity = cpu > 90 ? .warning : .ok
                 metrics.append(ConnectorMetric(
                     key: "cpu_pct", label: "CPU",
@@ -139,6 +192,124 @@ final class OrbiConnector: DeviceConnector {
                     key: "mem_pct", label: "Memory",
                     value: mem, unit: "%", severity: sev))
             }
+        }
+
+        // ── Connected clients + satellite nodes ───────────────────────────────
+        // V7 firmware (RBRE960) GetAttachDevice2 returns structured XML <Device> blocks,
+        // NOT the older pipe/at-delimited format. We fetch the raw XML and parse it directly.
+        //
+        // Satellite detection: satellite nodes don't appear as Device entries. Instead,
+        // each device has a <ConnAPMAC> field with the MAC of the AP it's connected to.
+        // Multiple unique ConnAPMAC values = multiple AP nodes (router + N satellites).
+
+        var totalClients  = 0
+        var clients24G    = 0
+        var clients5G     = 0
+        var clients6G     = 0
+        var parsedSats:   [OrbiSatellite] = []
+
+        // Parse <Device> blocks from raw GetAttachDevice2 XML
+        let deviceBlocks = parseDeviceBlocks(rawAttach2 ?? "")
+
+        // Collect unique AP MACs so we can infer satellite count
+        var apMacClientCount: [String: Int] = [:]   // AP MAC → number of clients on it
+        var apMacSample:      [String: (name: String, band: String)] = [:]
+
+        for dev in deviceBlocks {
+            let connAP = (dev["ConnAPMAC"] ?? "").uppercased()
+            let conn   = dev["ConnectionType"] ?? ""
+            let name   = dev["Name"] ?? dev["MAC"] ?? "Unknown"
+            let connLower = conn.lowercased()
+
+            totalClients += 1
+            if connLower.contains("2.4")  { clients24G += 1 }
+            else if connLower.contains("6") { clients6G += 1 }
+            else if connLower.contains("5") { clients5G += 1 }
+
+            if !connAP.isEmpty {
+                apMacClientCount[connAP, default: 0] += 1
+                if apMacSample[connAP] == nil {
+                    apMacSample[connAP] = (name: name, band: connLower)
+                }
+            }
+        }
+
+        // Each unique ConnAPMAC is an AP node (router or satellite).
+        // The router is the node with the most clients OR with 6 GHz clients (heuristic).
+        // We label the non-router APs as satellites, ordered by client count descending.
+        if apMacClientCount.count > 1 {
+            // Identify the primary router AP: highest client count wins; 6GHz clients are tie-breaker
+            let sortedAPs = apMacClientCount.sorted { a, b in
+                if a.value != b.value { return a.value > b.value }
+                // Prefer the AP that has a 6GHz client (more likely to be the router)
+                let a6 = deviceBlocks.filter { ($0["ConnAPMAC"] ?? "").uppercased() == a.key }
+                                     .contains { ($0["ConnectionType"] ?? "").contains("6") }
+                let b6 = deviceBlocks.filter { ($0["ConnAPMAC"] ?? "").uppercased() == b.key }
+                                     .contains { ($0["ConnectionType"] ?? "").contains("6") }
+                return a6 && !b6
+            }
+            let routerAPMac = sortedAPs.first?.key ?? ""
+
+            for (apMAC, clientCount) in apMacClientCount where apMAC != routerAPMac {
+                let macSuffix = apMAC.components(separatedBy: ":").suffix(2).joined(separator: ":")
+                parsedSats.append(OrbiSatellite(
+                    mac:          apMAC,
+                    name:         "Satellite (\(macSuffix))",
+                    ip:           "",
+                    backhaulBand: "",   // not determinable from client-side data
+                    clientCount:  clientCount,
+                    isOnline:     true
+                ))
+            }
+        }
+
+        let satelliteNodes = parsedSats.map(\.name)
+
+        if totalClients > 0 {
+            metrics.append(ConnectorMetric(
+                key: "total_clients", label: "Connected Clients",
+                value: Double(totalClients), unit: ""))
+        }
+        if clients24G > 0 {
+            metrics.append(ConnectorMetric(
+                key: "clients_2g", label: "2.4 GHz Clients",
+                value: Double(clients24G), unit: ""))
+        }
+        if clients5G > 0 {
+            metrics.append(ConnectorMetric(
+                key: "clients_5g", label: "5 GHz Clients",
+                value: Double(clients5G), unit: ""))
+        }
+        if clients6G > 0 {
+            metrics.append(ConnectorMetric(
+                key: "clients_6g", label: "6 GHz Clients",
+                value: Double(clients6G), unit: ""))
+        }
+        if !satelliteNodes.isEmpty {
+            metrics.append(ConnectorMetric(
+                key: "satellite_nodes", label: "Satellite Nodes",
+                value: Double(satelliteNodes.count), unit: "online",
+                severity: .ok))
+        }
+
+        // ── Guest network ─────────────────────────────────────────────────────
+        if let guestEnabled = guest?["NewGuestAccessEnabled"] {
+            let on = guestEnabled == "1"
+            metrics.append(ConnectorMetric(
+                key: "guest_enabled", label: "Guest Network",
+                value: on ? 1 : 0, unit: on ? "ON" : "OFF",
+                severity: on ? .info : .ok))
+        }
+
+        // ── Firmware update available ─────────────────────────────────────────
+        let newFWVersion  = newFW?["NewFirmwareVersion"] ?? newFW?["NewVersion"] ?? ""
+        let curFWVersion  = info?["Firmwareversion"] ?? info?["FirmwareVersion"] ?? ""
+        let fwUpdateAvail = !newFWVersion.isEmpty && newFWVersion != curFWVersion && newFWVersion != "N/A"
+        if fwUpdateAvail {
+            metrics.append(ConnectorMetric(
+                key: "fw_update", label: "FW Update",
+                value: 1, unit: newFWVersion,
+                severity: .info))
         }
 
         // ── Events ───────────────────────────────────────────────────────────
@@ -165,22 +336,82 @@ final class OrbiConnector: DeviceConnector {
                 severity: .warning))
         }
 
+        // Firmware update available
+        if fwUpdateAvail {
+            events.append(ConnectorEvent(
+                timestamp: Date(),
+                type: "fw_update_available",
+                description: "Firmware update available: \(newFWVersion) (installed: \(curFWVersion.isEmpty ? "unknown" : curFWVersion))",
+                severity: .info))
+        }
+
         // ── Summary ──────────────────────────────────────────────────────────
 
-        let model   = info?["ModelName"] ?? "Orbi"
-        let wanIP   = metrics.first(where: { $0.key == "wan_ip"      })?.unit ?? "–"
-        let todayRX = metrics.first(where: { $0.key == "today_rx_mb" })
-                             .map { String(format: "%.0f", $0.value) } ?? "–"
-        let summary = "\(model) · WAN \(wanIP) · Today RX \(todayRX) MB"
+        let model      = info?["ModelName"] ?? "Orbi"
+        let wanIP      = metrics.first(where: { $0.key == "wan_ip"      })?.unit ?? "–"
+        let todayRX    = metrics.first(where: { $0.key == "today_rx_mb" })
+                                .map { String(format: "%.0f", $0.value) } ?? "–"
+        let clientStr  = totalClients > 0 ? " · \(totalClients) clients" : ""
+        let satStr     = satelliteNodes.isEmpty ? "" : " · \(satelliteNodes.count) sat\(satelliteNodes.count == 1 ? "" : "s")"
+        let summary    = "\(model) · WAN \(wanIP) · Today RX \(todayRX) MB\(clientStr)\(satStr)"
 
         let snapshot = ConnectorSnapshot(
             connectorId: id, connectorName: displayName,
             timestamp: Date(), metrics: metrics, events: events, summary: summary)
 
+        // Build router summary for OrbiIntelligenceView
+        var summary2 = OrbiRouterSummary()
+        summary2.model         = info?["ModelName"] ?? "Orbi"
+        summary2.firmware      = info?["Firmwareversion"] ?? info?["FirmwareVersion"] ?? ""
+        summary2.wanIP         = metrics.first(where: { $0.key == "wan_ip" })?.unit ?? ""
+        summary2.wanConnected  = metrics.first(where: { $0.key == "wan_status" })?.severity == .ok
+        summary2.wanStatus     = metrics.first(where: { $0.key == "wan_status" })?.unit ?? ""
+        summary2.cpuPct        = metrics.first(where: { $0.key == "cpu_pct" })?.value
+        summary2.memPct        = metrics.first(where: { $0.key == "mem_pct" })?.value
+        summary2.totalClients  = totalClients
+        summary2.todayRXmb     = metrics.first(where: { $0.key == "today_rx_mb" })?.value
+        summary2.todayTXmb     = metrics.first(where: { $0.key == "today_tx_mb" })?.value
+        summary2.weekRXmb      = metrics.first(where: { $0.key == "week_rx_mb" })?.value
+        summary2.guestEnabled  = metrics.first(where: { $0.key == "guest_enabled" })?.value == 1
+        summary2.firmwareUpdate = fwUpdateAvail ? newFWVersion : ""
+        lastRouterSummary = summary2
+        lastSatellites    = parsedSats
+
         isConnected  = true
         lastError    = nil
         lastSnapshot = snapshot
         return snapshot
+    }
+
+    // MARK: - ~/.env reader
+
+    /// Parse KEY=value pairs from ~/.env, ignoring blank lines and comments.
+    private static func loadEnv() -> [String: String] {
+        let path = ("~/.env" as NSString).expandingTildeInPath
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return [:] }
+        var env: [String: String] = [:]
+        for line in raw.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#"),
+                  let eqRange = trimmed.range(of: "=") else { continue }
+            let key   = String(trimmed[trimmed.startIndex..<eqRange.lowerBound])
+            let value = String(trimmed[eqRange.upperBound...])
+            env[key] = value
+        }
+        return env
+    }
+
+    private var orbiHost: String {
+        let env = Self.loadEnv()
+        return env["ORBI_HOST"] ?? (config.host.isEmpty ? "192.168.40.161" : config.host)
+    }
+    private var orbiUser: String {
+        let env = Self.loadEnv()
+        return env["ORBI_USER"] ?? (config.username.isEmpty ? "admin" : config.username)
+    }
+    private var orbiPass: String {
+        let env = Self.loadEnv()
+        return env["ORBI_PASS"] ?? config.password
     }
 
     // MARK: - Auth
@@ -190,10 +421,9 @@ final class OrbiConnector: DeviceConnector {
         guard sessionCookie == nil else { return }
 
         let serviceURN = "urn:NETGEAR-ROUTER:service:DeviceConfig:1"
-        let user = config.username.isEmpty ? "admin" : config.username
 
         let body = soapEnvelope(action: "SOAPLogin", serviceURN: serviceURN,
-                                 params: "<Username>\(user)</Username>\n<Password>\(config.password)</Password>")
+                                 params: "<Username>\(orbiUser)</Username>\n<Password>\(orbiPass)</Password>")
 
         var req = URLRequest(url: soapURL)
         req.httpMethod = "POST"
@@ -239,9 +469,8 @@ final class OrbiConnector: DeviceConnector {
     // MARK: - SOAP
 
     private var soapURL: URL {
-        let host = config.host.isEmpty ? "192.168.40.161" : config.host
         let port = config.port > 0 ? config.port : 443
-        return URL(string: "https://\(host):\(port)/soap/server_sa/")!
+        return URL(string: "https://\(orbiHost):\(port)/soap/server_sa/")!
     }
 
     /// Build the SOAP envelope in pynetgear's format (different namespace declarations
@@ -303,6 +532,63 @@ final class OrbiConnector: DeviceConnector {
 
     private func optionalSOAP(_ action: String, service: String) async -> [String: String]? {
         try? await soapAction(action, service: service)
+    }
+
+    /// Fetch raw SOAP response body as a String (for actions that return nested XML).
+    private func fetchRawSOAP(_ action: String, service: String) async throws -> String {
+        let serviceURN = "urn:NETGEAR-ROUTER:service:\(service)"
+        let body = soapEnvelope(action: action, serviceURN: serviceURN, params: "")
+
+        var req = URLRequest(url: soapURL)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 7
+        req.setValue("multipart/form-data",          forHTTPHeaderField: "Content-Type")
+        req.setValue("\(serviceURN)#\(action)",       forHTTPHeaderField: "SOAPAction")
+        req.setValue("pynetgear",                      forHTTPHeaderField: "User-Agent")
+        req.setValue("no-cache",                       forHTTPHeaderField: "Cache-Control")
+        if let cookie = sessionCookie {
+            req.setValue(cookie,                       forHTTPHeaderField: "Cookie")
+        }
+        req.httpBody = Data(body.utf8)
+
+        let (data, response) = try await selfSignedSession.data(for: req)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw ConnectorError.httpError(code)
+        }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    private func optionalRawSOAP(_ action: String, service: String) async -> String? {
+        try? await fetchRawSOAP(action, service: service)
+    }
+
+    /// Parse <Device> blocks from a GetAttachDevice2 XML response body.
+    /// V7 RBRE960 firmware returns structured nested XML, not pipe/at-delimited format.
+    private func parseDeviceBlocks(_ xml: String) -> [[String: String]] {
+        guard !xml.isEmpty,
+              let blockRegex = try? NSRegularExpression(pattern: #"<Device>(.*?)</Device>"#,
+                                                         options: .dotMatchesLineSeparators),
+              let fieldRegex = try? NSRegularExpression(pattern: #"<([A-Za-z][A-Za-z0-9_]*)>([^<]*)</\1>"#)
+        else { return [] }
+
+        var devices: [[String: String]] = []
+        let range = NSRange(xml.startIndex..., in: xml)
+
+        for blockMatch in blockRegex.matches(in: xml, range: range) {
+            guard let blockRange = Range(blockMatch.range(at: 1), in: xml) else { continue }
+            let block = String(xml[blockRange])
+            var device: [String: String] = [:]
+            let blockNSRange = NSRange(block.startIndex..., in: block)
+            for fieldMatch in fieldRegex.matches(in: block, range: blockNSRange) {
+                guard let keyRange = Range(fieldMatch.range(at: 1), in: block),
+                      let valRange = Range(fieldMatch.range(at: 2), in: block) else { continue }
+                device[String(block[keyRange])] =
+                    String(block[valRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if !device.isEmpty { devices.append(device) }
+        }
+        return devices
     }
 
     /// Flat XML leaf-node parser — handles Netgear's single-level SOAP responses.

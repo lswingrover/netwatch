@@ -18,6 +18,12 @@ class IncidentManager: ObservableObject {
 
     /// Call from NetworkMonitorService when failure thresholds are breached.
     /// `connectorSnapshots` is optional — pass whatever the ConnectorManager has at the moment.
+    /// Webhook URL for alerting — set from MonitorSettings before incidents fire.
+    var webhookURL: String = ""
+
+    /// Health-score alert threshold. When a diagnosis score drops below this, fire webhook.
+    var healthScoreAlertThreshold: Int = 0
+
     func considerIncident(reason: String, subject: String,
                           pingStates: [PingState], dnsStates: [DNSState],
                           traceroute: TracerouteResult?,
@@ -43,12 +49,27 @@ class IncidentManager: ObservableObject {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         } catch { return }
 
+        // ── Run stack diagnosis ───────────────────────────────────────────────
+        let diagnosis = StackDiagnosisEngine.diagnose(
+            pingStates: pingStates,
+            dnsStates:  dnsStates,
+            traceroute: traceroute,
+            snapshots:  connectorSnapshots
+        )
+        // Write diagnosis report
+        try? diagnosis.report().write(
+            to: dir.appendingPathComponent("stack_diagnosis.txt"),
+            atomically: true, encoding: .utf8)
+
         // incident.txt
         var summary = """
         Incident Report
         Generated: \(Date())
         Reason:    \(reason)
         Subject:   \(subject)
+        Health Score: \(diagnosis.healthScore)/100
+        Root Cause: \(diagnosis.rootCause.rawValue) (\(diagnosis.confidence.rawValue) confidence)
+        Diagnosis: \(diagnosis.summary)
 
         === Ping Status ===
         """
@@ -80,6 +101,9 @@ class IncidentManager: ObservableObject {
         Date/Time: \(Date())
         Issue: \(reason) — \(subject)
 
+        Network Health Score: \(diagnosis.healthScore)/100
+        Root Cause Analysis: \(diagnosis.summary)
+
         Key metrics at time of incident:
         \(pingStates.map { "  \($0.target.host): avg \($0.avgRTT.rttString), loss \(String(format: "%.0f%%", (1 - $0.successRate) * 100))" }.joined(separator: "\n"))
 
@@ -88,7 +112,10 @@ class IncidentManager: ObservableObject {
 
         \(traceroute.map { "Traceroute to \($0.target): \($0.hopCount) hops" } ?? "")
 
-        Please investigate. Logs and packet captures are attached.
+        Recommended next steps:
+        \(diagnosis.recommendations.map { "  • \($0)" }.joined(separator: "\n"))
+
+        Please investigate. Full stack diagnosis report is attached as stack_diagnosis.txt.
         """
 
         try? summary.write(to: dir.appendingPathComponent("incident.txt"), atomically: true, encoding: .utf8)
@@ -143,6 +170,19 @@ class IncidentManager: ObservableObject {
             identifier: "netwatch-\(incident.id.uuidString)",
             content: content, trigger: nil)
         try? await UNUserNotificationCenter.current().add(req)
+
+        // Webhook alert (fire-and-forget; errors logged to stderr)
+        if !webhookURL.isEmpty {
+            let shouldAlert = healthScoreAlertThreshold == 0
+                           || diagnosis.healthScore < healthScoreAlertThreshold
+            if shouldAlert {
+                await WebhookAlerter.sendIncident(
+                    reason:     reason,
+                    diagnosis:  diagnosis,
+                    webhookURL: webhookURL
+                )
+            }
+        }
     }
 
     private static func timestamp() -> String {

@@ -12,10 +12,12 @@
 /// Service URN:   urn:NETGEAR-ROUTER:service:DeviceInfo:1
 ///
 /// Actions used:
-///   GetInfo                   — firmware, model, serial, WAN IP
-///   GetSystemInfo             — uptime, CPU, memory (some models)
+///   GetInfo                   — firmware, model, serial, WAN IP, connection type
+///   GetSystemInfo             — uptime, CPU load %, memory % (some models)
 ///   GetTrafficMeterStatistics — per-day/week RX/TX byte totals
-///   ETHConfigInfoGet          — port-level stats (some models)
+///   ETHConfigInfoGet          — per-port link speed/status (some models)
+///   GetAttachDevice           — connected client list → count
+///   GetNewFirmware            — firmware update availability
 ///
 /// Note: Netgear's SOAP API is model-specific. Actions that aren't supported
 /// on a given model return a SOAP fault; the connector handles those gracefully.
@@ -61,37 +63,83 @@ final class NightawkConnector: DeviceConnector {
     }
 
     func fetchSnapshot() async throws -> ConnectorSnapshot {
-        // Fetch in parallel; tolerate partial failures (not all models support all actions)
-        async let infoResult    = optionalSOAP("GetInfo",                   service: "DeviceInfo")
-        async let trafficResult = optionalSOAP("GetTrafficMeterStatistics", service: "TrafficMeter")
+        // ── Fire all SOAP calls in parallel ───────────────────────────────────
+        // optionalSOAP returns nil on unsupported actions (SOAP fault / HTTP error)
+        async let infoResult      = optionalSOAP("GetInfo",                   service: "DeviceInfo")
+        async let trafficResult   = optionalSOAP("GetTrafficMeterStatistics", service: "TrafficMeter")
+        async let sysInfoResult   = optionalSOAP("GetSystemInfo",             service: "DeviceInfo")
+        async let ethResult       = optionalSOAP("ETHConfigInfoGet",          service: "DeviceConfig")
+        async let attachResult    = optionalSOAP("GetAttachDevice",           service: "AttachDevice")
+        async let firmwareResult  = optionalSOAP("GetNewFirmware",            service: "FirmwareCheck")
 
-        let (info, traffic) = await (infoResult, trafficResult)
+        let (info, traffic, sysInfo, ethInfo, attachInfo, fwInfo) = await (
+            infoResult, trafficResult, sysInfoResult, ethResult, attachResult, firmwareResult
+        )
 
         // ── Metrics ──────────────────────────────────────────────────────────
 
         var metrics: [ConnectorMetric] = []
 
-        if let info {
-            if let uptime = uptimeSeconds(from: info["Uptime"] ?? "") {
+        // ── GetInfo: WAN IP, connection type, firmware, uptime (fallback) ─────
+        let model    = info?["ModelName"]        ?? "Nighthawk"
+        let firmware = info?["Firmwareversion"]  ?? ""
+        if let wanIP = info?["ExternalIPAddress"], !wanIP.isEmpty {
+            metrics.append(ConnectorMetric(
+                key: "wan_ip", label: "WAN IP",
+                value: 0, unit: wanIP))
+        }
+        if let connState = info?["ConnectionType"], !connState.isEmpty {
+            metrics.append(ConnectorMetric(
+                key: "conn_type", label: "Connection",
+                value: 0, unit: connState))
+        }
+        if !firmware.isEmpty {
+            metrics.append(ConnectorMetric(
+                key: "firmware", label: "Firmware",
+                value: 0, unit: firmware))
+        }
+
+        // ── GetSystemInfo: uptime, CPU load, memory ───────────────────────────
+        var uptimeH: Double? = nil
+        if let sys = sysInfo ?? info {   // GetSystemInfo preferred; fall back to GetInfo
+            if let uptime = uptimeSeconds(from: sys["Uptime"] ?? "") {
+                uptimeH = uptime / 3600
                 metrics.append(ConnectorMetric(
                     key: "uptime_h", label: "Uptime",
                     value: uptime / 3600, unit: "h"))
             }
-            if let wanIP = info["ExternalIPAddress"], !wanIP.isEmpty {
-                // Record WAN IP as a labelled metric with value 0 — mainly for the summary
+        }
+        if let sys = sysInfo {
+            // CPU utilization (0-100 %)
+            if let cpuStr = sys["CPUUtilization"] ?? sys["ProcessorLoad"],
+               let cpu = Double(cpuStr.trimmingCharacters(in: .init(charactersIn: "% "))) {
+                let sev: MetricSeverity = cpu < 70 ? .ok : (cpu < 90 ? .warning : .critical)
                 metrics.append(ConnectorMetric(
-                    key: "wan_ip", label: "WAN IP",
-                    value: 0, unit: wanIP))
+                    key: "cpu_pct", label: "CPU Load",
+                    value: cpu, unit: "%", severity: sev))
             }
-            if let connState = info["ConnectionType"] {
+            // Memory utilization — prefer MemoryUtilization %; compute from Free/Physical if absent
+            if let memPctStr = sys["MemoryUtilization"],
+               let memPct = Double(memPctStr.trimmingCharacters(in: .init(charactersIn: "% "))) {
+                let sev: MetricSeverity = memPct < 75 ? .ok : (memPct < 90 ? .warning : .critical)
                 metrics.append(ConnectorMetric(
-                    key: "conn_type", label: "Connection",
-                    value: 0, unit: connState))
+                    key: "mem_pct", label: "Memory",
+                    value: memPct, unit: "%", severity: sev))
+            } else if let totalStr = sys["PhysicalMemory"], let freeStr = sys["FreeMemory"],
+                      let total = Double(totalStr), let free = Double(freeStr), total > 0 {
+                let usedPct = (1.0 - free / total) * 100.0
+                let sev: MetricSeverity = usedPct < 75 ? .ok : (usedPct < 90 ? .warning : .critical)
+                metrics.append(ConnectorMetric(
+                    key: "mem_pct", label: "Memory",
+                    value: usedPct, unit: "%", severity: sev))
+                metrics.append(ConnectorMetric(
+                    key: "mem_free_mb", label: "Free RAM",
+                    value: free, unit: "MB"))
             }
         }
 
+        // ── GetTrafficMeterStatistics: today/week bandwidth ───────────────────
         if let traffic {
-            // Traffic meter returns cumulative MB; report as-is
             if let rxStr = traffic["TodayDownload"], let rx = Double(rxStr) {
                 metrics.append(ConnectorMetric(
                     key: "today_rx_mb", label: "Today RX",
@@ -107,28 +155,110 @@ final class NightawkConnector: DeviceConnector {
                     key: "week_rx_mb", label: "Week RX",
                     value: weekRx, unit: "MB"))
             }
+            if let weekTxStr = traffic["WeekUpload"], let weekTx = Double(weekTxStr) {
+                metrics.append(ConnectorMetric(
+                    key: "week_tx_mb", label: "Week TX",
+                    value: weekTx, unit: "MB"))
+            }
+        }
+
+        // ── ETHConfigInfoGet: per-port link speed/status ──────────────────────
+        // Netgear returns NewEthernetStatus as pipe+comma delimited:
+        // "1|1000M|Full|0|100M|Half" → (portEnabled|speed|duplex) per port
+        var ethPortMetrics = 0
+        if let eth = ethInfo,
+           let ethStatus = eth["NewEthernetStatus"] ?? eth["EthernetStatus"] {
+            let ports = parseEthPorts(ethStatus)
+            for (idx, port) in ports.enumerated() {
+                let portNum = idx + 1
+                let linked  = port.linked
+                let speed   = port.speed
+                metrics.append(ConnectorMetric(
+                    key:   "eth_port_\(portNum)",
+                    label: "ETH Port \(portNum)",
+                    value: linked ? 1 : 0,
+                    unit:  linked ? speed : "down",
+                    severity: linked ? .ok : .info))
+                ethPortMetrics += 1
+            }
+        }
+
+        // ── GetAttachDevice: connected client count ───────────────────────────
+        var clientCount: Int? = nil
+        if let attach = attachInfo,
+           let deviceList = attach["NewAttachDevice"] ?? attach["AttachDevice"] {
+            // Each device is a pipe-delimited line: name|ip|mac|conn|signal
+            let entries = deviceList
+                .components(separatedBy: "@")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if !entries.isEmpty {
+                clientCount = entries.count
+                metrics.append(ConnectorMetric(
+                    key: "client_count", label: "Connected Clients",
+                    value: Double(entries.count), unit: ""))
+            }
+        }
+
+        // ── GetNewFirmware: update available? ─────────────────────────────────
+        var firmwareUpdateAvailable = false
+        if let fw = fwInfo {
+            let newVer = fw["NewFirmwareVersion"] ?? fw["FirmwareVersion"] ?? ""
+            firmwareUpdateAvailable = !newVer.isEmpty && newVer != "N/A" && newVer != firmware
+            if firmwareUpdateAvailable {
+                metrics.append(ConnectorMetric(
+                    key: "firmware_update", label: "Firmware Update",
+                    value: 1, unit: newVer,
+                    severity: .warning))
+            }
         }
 
         // ── Events ───────────────────────────────────────────────────────────
 
         var events: [ConnectorEvent] = []
 
-        // If uptime < 5 min, flag a recent reboot
-        if let uptimeMetric = metrics.first(where: { $0.key == "uptime_h" }),
-           uptimeMetric.value < (5.0 / 60.0) {
+        // Recent reboot
+        if let uh = uptimeH, uh < (5.0 / 60.0) {
             events.append(ConnectorEvent(
-                timestamp: Date(),
-                type: "reboot",
+                timestamp: Date(), type: "reboot",
                 description: "Router recently rebooted (uptime < 5 minutes)",
+                severity: .warning))
+        }
+
+        // High CPU
+        if let cpuMetric = metrics.first(where: { $0.key == "cpu_pct" }),
+           cpuMetric.severity == .warning || cpuMetric.severity == .critical {
+            events.append(ConnectorEvent(
+                timestamp: Date(), type: "high_cpu",
+                description: String(format: "CPU load elevated: %.0f%%", cpuMetric.value),
+                severity: cpuMetric.severity))
+        }
+
+        // High memory
+        if let memMetric = metrics.first(where: { $0.key == "mem_pct" }),
+           memMetric.severity == .warning || memMetric.severity == .critical {
+            events.append(ConnectorEvent(
+                timestamp: Date(), type: "high_memory",
+                description: String(format: "Memory usage elevated: %.0f%%", memMetric.value),
+                severity: memMetric.severity))
+        }
+
+        // Firmware update available
+        if firmwareUpdateAvailable,
+           let newVerMetric = metrics.first(where: { $0.key == "firmware_update" }) {
+            events.append(ConnectorEvent(
+                timestamp: Date(), type: "firmware_update",
+                description: "Firmware update available: \(newVerMetric.unit)",
                 severity: .warning))
         }
 
         // ── Summary ──────────────────────────────────────────────────────────
 
-        let model    = info?["ModelName"] ?? "Nighthawk"
-        let wanIP    = info?["ExternalIPAddress"] ?? "–"
-        let todayRX  = metrics.first { $0.key == "today_rx_mb" }.map { String(format: "%.0f", $0.value) } ?? "–"
-        let summary  = "\(model) · WAN \(wanIP) · Today RX \(todayRX) MB"
+        let wanIPStr    = info?["ExternalIPAddress"] ?? "–"
+        let todayRX     = metrics.first { $0.key == "today_rx_mb" }.map { String(format: "%.0f MB", $0.value) } ?? "–"
+        let clientStr   = clientCount.map { " · \($0) clients" } ?? ""
+        let fwStr       = firmware.isEmpty ? "" : " · FW \(firmware)"
+        let summary     = "\(model)\(fwStr) · WAN \(wanIPStr) · Today RX \(todayRX)\(clientStr)"
 
         let snapshot = ConnectorSnapshot(
             connectorId: id, connectorName: displayName,
@@ -232,5 +362,58 @@ final class NightawkConnector: DeviceConnector {
             }
         }
         return total > 0 ? total : nil
+    }
+
+    /// Parsed representation of a single Ethernet port entry.
+    private struct EthPort {
+        let linked: Bool
+        let speed:  String   // e.g. "1000M", "100M"
+        let duplex: String   // "Full" or "Half"
+    }
+
+    /// Parses Netgear ETH port status strings.
+    ///
+    /// Two common formats observed across Nighthawk firmware versions:
+    ///
+    ///   Format A — pipe-separated triplets, one port per '@' group:
+    ///     "1|1000M|Full@0|100M|Half@1|100M|Full"
+    ///     Fields: linked(0/1) | speed | duplex
+    ///
+    ///   Format B — space-separated link indicators per port:
+    ///     "Up|1000M Down|0M Up|100M"
+    ///
+    /// Returns an array of EthPort in port-index order.
+    private func parseEthPorts(_ raw: String) -> [EthPort] {
+        // Try Format A (@ delimited groups of pipe-separated values)
+        let atGroups = raw.components(separatedBy: "@").filter { !$0.isEmpty }
+        if atGroups.count > 1 {
+            return atGroups.compactMap { group in
+                let parts = group.components(separatedBy: "|")
+                guard parts.count >= 2 else { return nil }
+                let linked = parts[0].trimmingCharacters(in: .whitespaces) == "1"
+                let speed  = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : "?"
+                let duplex = parts.count > 2 ? parts[2].trimmingCharacters(in: .whitespaces) : ""
+                return EthPort(linked: linked, speed: speed, duplex: duplex)
+            }
+        }
+
+        // Try Format B — "Up|1000M" tokens
+        let tokens = raw.components(separatedBy: " ").filter { !$0.isEmpty }
+        var ports: [EthPort] = []
+        for token in tokens {
+            let parts = token.components(separatedBy: "|")
+            if parts.count >= 2 {
+                let state = parts[0].lowercased()
+                let speed = parts[1]
+                let linked = state == "up" || state == "1"
+                ports.append(EthPort(linked: linked, speed: speed, duplex: ""))
+            }
+        }
+        if !ports.isEmpty { return ports }
+
+        // Fallback: single value like "1000M" or "Down"
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let linked  = !trimmed.lowercased().contains("down") && !trimmed.isEmpty
+        return [EthPort(linked: linked, speed: trimmed, duplex: "")]
     }
 }

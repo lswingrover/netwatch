@@ -2,8 +2,9 @@ import SwiftUI
 
 /// Content displayed in the menu bar extra popover window.
 struct MenuBarStatusView: View {
-    @EnvironmentObject var monitor: NetworkMonitorService
-    @EnvironmentObject var ifm: InterfaceMonitor
+    @EnvironmentObject var monitor:          NetworkMonitorService
+    @EnvironmentObject var ifm:              InterfaceMonitor
+    @EnvironmentObject var speedTestMonitor: SpeedTestMonitor
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -54,8 +55,9 @@ struct MenuBarStatusView: View {
             // ── Ping quick-glance ─────────────────────────────────────────────
             Divider()
             VStack(spacing: 4) {
-                ForEach(monitor.pingStates.prefix(4)) { ps in
-                    HStack {
+                ForEach(0..<min(4, monitor.pingStates.count), id: \.self) { i in
+                    let ps = monitor.pingStates[i]
+                    HStack(spacing: 6) {
                         Circle()
                             .fill(ps.isOnline ? Color.green : Color.red)
                             .frame(width: 6, height: 6)
@@ -64,10 +66,28 @@ struct MenuBarStatusView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         Spacer()
+                        MenuBarRTTSparkline(values: ps.recentRTTs, maxVal: 200)
+                            .frame(width: 44, height: 14)
                         Text(ps.lastRTT.rttString)
                             .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(ps.lastRTT.map { $0 < 50 ? Color.green : $0 < 100 ? .yellow : .red } ?? .secondary)
+                            .foregroundStyle(ps.lastRTT.map { $0 < 50 ? Color.green : $0 < 100 ? Color.yellow : Color.red } ?? Color(NSColor.secondaryLabelColor))
+                            .frame(width: 54, alignment: .trailing)
                     }
+                }
+            }
+
+            if let r = speedTestMonitor.lastResult, r.isSuccess {
+                Divider()
+                HStack {
+                    Image(systemName: "speedometer")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(String(format: "\u{2193}%.0f  \u{2191}%.0f Mbps \u{00B7} %@",
+                                r.downloadMbps, r.uploadMbps, r.quality.label))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(r.timestamp, style: .relative)
+                        .font(.caption2).foregroundStyle(.tertiary)
                 }
             }
 
@@ -102,6 +122,41 @@ struct MenuBarStatusView: View {
 
     var rssiColor: Color {
         ifm.wifiRSSI >= -60 ? .green : ifm.wifiRSSI >= -75 ? .yellow : .red
+    }
+}
+
+// MARK: - MenuBar RTT Sparkline (separate from OverviewView's RTTSparkline — takes raw ms)
+
+private struct MenuBarRTTSparkline: View {
+    let values: [Double]
+    var maxVal: Double = 100
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let cap = max(1, maxVal)
+            let n = values.count
+
+            if n >= 2 {
+                Path { path in
+                    for (i, v) in values.enumerated() {
+                        let x = w * CGFloat(i) / CGFloat(max(1, n - 1))
+                        let y = h * (1.0 - CGFloat(min(v, cap) / cap))
+                        if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                        else       { path.addLine(to: CGPoint(x: x, y: y)) }
+                    }
+                }
+                .stroke(sparklineColor, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+            }
+        }
+    }
+
+    private var sparklineColor: Color {
+        guard let last = values.last else { return .secondary }
+        if last < 50  { return .green }
+        if last < 100 { return .yellow }
+        return .red
     }
 }
 

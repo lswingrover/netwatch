@@ -14,6 +14,8 @@ struct NetWatchApp: App {
                 .environmentObject(monitor.tracerouteMonitor)
                 .environmentObject(monitor.connectorManager)
                 .environmentObject(monitor.incidentManager)
+                .environmentObject(monitor.speedTestMonitor)
+                .environmentObject(monitor.remediationEngine)
                 .environmentObject(updateChecker)
                 .onAppear {
                     registerConnectors()
@@ -35,7 +37,7 @@ struct NetWatchApp: App {
                 Button("About NetWatch") {
                     NSApp.orderFrontStandardAboutPanel(options: [
                         .applicationName: "NetWatch",
-                        .applicationVersion: "1.3.0",
+                        .applicationVersion: "1.3.1",
                         .credits: NSAttributedString(string: "Network monitoring dashboard.\nBuilt by Louis Swingrover.")
                     ])
                 }
@@ -47,6 +49,12 @@ struct NetWatchApp: App {
                 .keyboardShortcut("p", modifiers: .command)
 
                 Divider()
+
+                Button("Run Speed Test") {
+                    monitor.speedTestMonitor.runTest()
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(monitor.speedTestMonitor.isRunning)
 
                 Button("Run Traceroute Now") {
                     for target in monitor.settings.tracerouteTargets {
@@ -83,6 +91,7 @@ struct NetWatchApp: App {
             MenuBarStatusView()
                 .environmentObject(monitor)
                 .environmentObject(monitor.interfaceMonitor)
+                .environmentObject(monitor.speedTestMonitor)
         } label: {
             Image(systemName: monitor.overallStatus.systemImage)
                 .foregroundStyle(
@@ -152,13 +161,13 @@ struct NetWatchApp: App {
             vendor: "Netgear",
             docsURL: "https://github.com/lswingrover/NetWatch#orbi-connector",
             configHelp: ConnectorConfigHelp(
-                hostPlaceholder: "192.168.40.161",
-                hostHelp: "Local IP of your Orbi router (not satellite)",
+                hostPlaceholder: "Leave blank (reads from ~/.env)",
+                hostHelp: "Credentials read from ~/.env — ORBI_HOST (router IP), ORBI_USER (default: admin), ORBI_PASS (admin password).",
                 apiKeyLabel: "",
                 apiKeyHelp: "",
-                usernameLabel: "Username",
-                passwordLabel: "Admin Password",
-                showCredentials: true
+                usernameLabel: "",
+                passwordLabel: "",
+                showCredentials: false
             )
         )
         ConnectorRegistry.shared.register(orbiDescriptor) { OrbiConnector(config: $0) }

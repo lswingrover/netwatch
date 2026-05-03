@@ -5,6 +5,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [1.3.1] — 2026-05-03
+
+### Added
+- **Firewalla intelligence view** — new sidebar tab surfacing live flows (top talkers by bytes), active alarms, and top network destinations; powered by a Python snapshot script that reads Firewalla's local Redis store over SSH
+- **Firewalla device actions** — pause/resume network access and block domains for any device from within the Firewalla tab
+- **Bulk target import** — paste a newline-separated list of IPs/hostnames into Preferences to add multiple ping/DNS/traceroute targets at once; includes cross-list add UI (add a host to multiple lists simultaneously)
+- **Speed test monitor** — wraps Apple's `networkQuality` tool; on-demand test with results history chart on a dedicated Speed Test tab; wired into sidebar nav and Settings
+- **Auto-remediation engine** — DNS failover on repeated ping failure: when a configured target is unreachable, `RemediationEngine` automatically rotates the system DNS resolver to a fallback (Cloudflare/Google) and logs the action to the incident bundle
+- **Orbi satellite detail view** — per-satellite panel in the Orbi connector tab showing backhaul band, client count, MAC, and online status; satellite list sourced from `GetAttachDevice2` ConnAPMAC inference
+- **Network topology map** — visual node-link diagram in the Overview tab showing the detected topology (CM3000 → Firewalla → Orbi router → satellites → clients); edges colored by health status
+- **Menu bar quick stats** — per-app status item shows live download/upload rates, gateway RTT, and a glanceable health indicator without opening the main window
+- **Keyboard shortcuts** — `⌘P` pause/resume, `⌘R` speed test, `⌘T` traceroute; documented in Monitor menu
+
+### Fixed
+- **Orbi V7 firmware client/satellite parsing** — RBRE960 firmware V7.2.8.2 returns structured `<Device>` XML blocks in `GetAttachDevice2` instead of the legacy pipe/at-delimited format; rewrote parsing with `parseDeviceBlocks` + `fetchRawSOAP`; client count now accurate (14 devices) and satellite detection works via `ConnAPMAC` heuristic (1 satellite detected at `34:98:B5:DD:09:B6`)
+- **`NSLocalNetworkUsageDescription` / macOS 14+ local network permission** — added required plist key and `NSBonjourServices` to `support/Info.plist`; `build_app.sh` already copies and re-signs, so permission is stable across binary updates
+- **StackHealth local client inference** — improved heuristic no longer mis-classifies Orbi satellite APs as wired clients; mesh backhaul clients excluded from local client count
+- **About panel version string** — hardcoded `"1.3.0"` in `NetWatchApp.swift` now reads `"1.3.1"` to match `Info.plist`
+
+### Changed
+- `CM3000Connector` updated to remove 1Password UUID lookups; credentials read directly from `~/.env` (`CM3000_ADMIN_PASS`, `FIREWALLA_SSH_PASS`); reduces dependency on `op` CLI and eliminates lookup failures when 1Password is locked
+- `CM3000Connector` now exposes per-channel SNR, power, and uncorrectable codeword data for the channel detail table added in Sprint 7
+- `ConnectorManager.pollAll()` now polls connectors sequentially (was parallel) to prevent SSH tunnel conflicts between Firewalla and CM3000 scripts
+- `build_app.sh` — ad-hoc code signing step now uses `--options runtime` flag for consistency; `NSWorkspace.setIcon` step added to beat Dock icon cache on reinstall
+- `Info.plist` `CFBundleVersion` bumped to 5, `CFBundleShortVersionString` bumped to 1.3.1
+
+---
+
 ## [1.3.0] — 2026-04-29
 
 ### Added

@@ -6,6 +6,9 @@
 ///
 /// Poll cycle: every 30 seconds (configurable). Individual connectors time out
 /// after 10 seconds per fetch so a dead device can't stall the cycle.
+///
+/// Every successful snapshot is automatically appended to SnapshotStore for
+/// 7-day rolling history + metric trend computation.
 
 import Foundation
 import Combine
@@ -21,12 +24,24 @@ final class ConnectorManager: ObservableObject {
     /// Latest snapshot per connector id. Empty until first successful poll.
     @Published private(set) var snapshots: [String: ConnectorSnapshot] = [:]
 
+    /// Latest error message per connector id. Set on failed polls, cleared on success.
+    /// Used by views to observe error state (connectors themselves are not ObservableObjects).
+    @Published private(set) var connectorErrors: [String: String] = [:]
+
     /// True while a poll cycle is in flight.
     @Published private(set) var isPolling = false
+
+    // MARK: - History
+
+    /// Rolling 7-day metric store — read by ConnectorTimelineView and trend badges.
+    let snapshotStore = SnapshotStore()
 
     // MARK: - Config
 
     var pollInterval: TimeInterval = 30.0
+
+    /// Called after each poll cycle to check bandwidth budgets. Injected by NetworkMonitorService.
+    var onPollComplete: (([ConnectorSnapshot]) async -> Void)?
 
     // MARK: - Private
 
@@ -84,20 +99,28 @@ final class ConnectorManager: ObservableObject {
         isPolling = true
         defer { isPolling = false }
 
-        // Poll connectors sequentially. Each call has a built-in timeout (set in
-        // the connector implementation). Parallel polling is possible but sequential
-        // is safer for routers that struggle with concurrent requests.
+        // Poll connectors sequentially. Each connector talks to a different device
+        // via SSH/HTTP, so sequential is safe. The per-connector outer timeout is
+        // 60 s — generous enough for SSH-based scripts (typically 10-15 s each).
         for connector in connectors {
             guard !Task.isCancelled else { break }
             do {
-                let snapshot = try await withTimeout(seconds: 20) {
+                let snapshot = try await withTimeout(seconds: 60) {
                     try await connector.fetchSnapshot()
                 }
                 snapshots[connector.id] = snapshot
+                connectorErrors[connector.id] = nil   // clear on success
+                snapshotStore.append(snapshot)
             } catch {
-                // Failed fetch — connector updates its own lastError; we just skip.
+                // Failed fetch — record the error so views can observe it.
+                let msg = (error as? ConnectorError)?.errorDescription
+                    ?? error.localizedDescription
+                connectorErrors[connector.id] = msg
             }
         }
+
+        // Post-poll hook (bandwidth budget check etc.)
+        await onPollComplete?(allSnapshots)
     }
 
     // MARK: - Snapshot access

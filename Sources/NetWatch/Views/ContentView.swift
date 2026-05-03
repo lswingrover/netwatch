@@ -7,6 +7,8 @@ enum NavItem: String, CaseIterable, Identifiable {
     case dns        = "DNS"
     case traceroute = "Traceroute"
     case devices    = "Devices"
+    case topology   = "Topology"
+    case speedTest  = "Speed Test"
     case incidents  = "Incidents"
 
     var id: String { rawValue }
@@ -19,16 +21,21 @@ enum NavItem: String, CaseIterable, Identifiable {
         case .dns:        "server.rack"
         case .traceroute: "point.3.connected.trianglepath.dotted"
         case .devices:    "cable.connector.horizontal"
+        case .topology:   "point.3.filled.connected.trianglepath.dotted"
+        case .speedTest:  "speedometer"
         case .incidents:  "exclamationmark.triangle"
         }
     }
 }
 
 struct ContentView: View {
-    @EnvironmentObject var monitor: NetworkMonitorService
-    @EnvironmentObject var ifMonitor: InterfaceMonitor
+    @EnvironmentObject var monitor:          NetworkMonitorService
+    @EnvironmentObject var ifMonitor:        InterfaceMonitor
     @EnvironmentObject var connectorManager: ConnectorManager
-    @State private var selection: NavItem = .overview
+    @State private var selection:           NavItem = .overview
+    @State private var showPalette:         Bool    = false
+    /// Set by topology node taps to deep-link into a specific connector in ConnectorsView.
+    @State private var pendingConnectorID:  String? = nil
 
     var body: some View {
         NavigationSplitView {
@@ -52,7 +59,13 @@ struct ContentView: View {
                 case .ping:       PingView()
                 case .dns:        DNSView()
                 case .traceroute: TracerouteView()
-                case .devices:    ConnectorsView()
+                case .devices:    ConnectorsView(requestedConnectorID: $pendingConnectorID)
+                case .topology:
+                    TopologyView { nodeId in
+                        selection = .devices
+                        pendingConnectorID = nodeId
+                    }
+                case .speedTest:  SpeedTestView()
                 case .incidents:  IncidentsView()
                 }
             }
@@ -67,6 +80,19 @@ struct ContentView: View {
                     }
                     .help(monitor.isRunning ? "Pause monitoring" : "Resume monitoring")
                 }
+                ToolbarItem {
+                    Button {
+                        showPalette = true
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                    }
+                    .help("Command palette (⌘K)")
+                    .keyboardShortcut("k", modifiers: .command)
+                }
+            }
+            .sheet(isPresented: $showPalette) {
+                CommandPaletteView(selection: $selection, isPresented: $showPalette)
+                    .environmentObject(monitor)
             }
         }
     }

@@ -260,6 +260,34 @@ struct MonitorSettings: Codable {
     /// the `enabled` flag controls whether ConnectorManager instantiates it.
     var connectorConfigs: [ConnectorConfig] = []
 
+    // MARK: Alerting (Sprint 8)
+
+    /// Slack or generic HTTP webhook URL. Empty = alerting disabled.
+    var webhookURL: String = ""
+
+    /// Fire a webhook when the network health score drops below this value (0 = disabled).
+    var alertOnHealthScoreBelow: Int = 0
+
+    /// Weekly bandwidth budget in GB across all connectors (0 = disabled).
+    var weeklyBandwidthBudgetGB: Double = 0
+
+    /// Alert again when this many hours have elapsed since the last bandwidth alert (0 = each poll).
+    var bandwidthAlertCooldownHours: Double = 24
+
+    /// Fire a webhook when speed test download drops below this Mbps (0 = disabled).
+    var speedTestAlertThresholdMbps: Double = 0
+
+    // MARK: Remediation (Sprint 11)
+
+    /// Enable automated remediation actions (DNS failover, etc.).
+    var remediationEnabled: Bool = false
+
+    /// Consecutive failures required to trigger DNS failover.
+    var remediationFailThreshold: Int = 3
+
+    /// Backup DNS servers used during failover.
+    var remediationBackupDNS: [String] = ["9.9.9.9", "208.67.222.222"]
+
     static let `default` = MonitorSettings()
 
     static func load() -> MonitorSettings {
@@ -292,6 +320,39 @@ struct MonitorSettings: Codable {
         } else {
             connectorConfigs.append(config)
         }
+    }
+}
+
+// MARK: - MonitorSettings Codable (custom decoder so new fields never break old saved settings)
+
+extension MonitorSettings {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Pre-existing fields — required; if absent the stored JSON is corrupt → fall back to .default
+        pingTargets                    = try c.decode([PingTarget].self,      forKey: .pingTargets)
+        dnsTargets                     = try c.decode([DNSTarget].self,       forKey: .dnsTargets)
+        tracerouteTargets              = try c.decode([String].self,          forKey: .tracerouteTargets)
+        pingIntervalSeconds            = try c.decode(Double.self,            forKey: .pingIntervalSeconds)
+        dnsIntervalSeconds             = try c.decode(Double.self,            forKey: .dnsIntervalSeconds)
+        tracerouteIntervalSeconds      = try c.decode(Double.self,            forKey: .tracerouteIntervalSeconds)
+        interfaceSampleIntervalSeconds = try c.decode(Double.self,            forKey: .interfaceSampleIntervalSeconds)
+        pingFailThreshold              = try c.decode(Int.self,               forKey: .pingFailThreshold)
+        dnsFailThreshold               = try c.decode(Int.self,               forKey: .dnsFailThreshold)
+        incidentCooldownSeconds        = try c.decode(Double.self,            forKey: .incidentCooldownSeconds)
+        networkInterface               = try c.decode(String.self,            forKey: .networkInterface)
+        baseDirectory                  = try c.decode(String.self,            forKey: .baseDirectory)
+        connectorConfigs               = try c.decode([ConnectorConfig].self, forKey: .connectorConfigs)
+        // Sprint 8+ fields — use decodeIfPresent so old saved JSON still deserialises cleanly
+        webhookURL                   = try c.decodeIfPresent(String.self,  forKey: .webhookURL)                   ?? ""
+        alertOnHealthScoreBelow      = try c.decodeIfPresent(Int.self,     forKey: .alertOnHealthScoreBelow)      ?? 0
+        weeklyBandwidthBudgetGB      = try c.decodeIfPresent(Double.self,  forKey: .weeklyBandwidthBudgetGB)      ?? 0
+        bandwidthAlertCooldownHours  = try c.decodeIfPresent(Double.self,  forKey: .bandwidthAlertCooldownHours)  ?? 24
+        // Sprint 10 field
+        speedTestAlertThresholdMbps  = try c.decodeIfPresent(Double.self,   forKey: .speedTestAlertThresholdMbps) ?? 0
+        // Sprint 11 fields
+        remediationEnabled           = try c.decodeIfPresent(Bool.self,     forKey: .remediationEnabled)          ?? false
+        remediationFailThreshold     = try c.decodeIfPresent(Int.self,      forKey: .remediationFailThreshold)    ?? 3
+        remediationBackupDNS         = try c.decodeIfPresent([String].self, forKey: .remediationBackupDNS)        ?? ["9.9.9.9", "208.67.222.222"]
     }
 }
 

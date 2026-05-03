@@ -13,10 +13,13 @@ class NetworkMonitorService: ObservableObject {
     @Published var isRunning: Bool = false
 
     // Sub-monitors (also ObservableObjects, observed by views)
-    let interfaceMonitor  = InterfaceMonitor(interval: 1.0)
-    let tracerouteMonitor = TracerouteMonitor(interval: 60.0)
-    let connectorManager  = ConnectorManager()
-    let incidentManager:  IncidentManager
+    let interfaceMonitor      = InterfaceMonitor(interval: 1.0)
+    let tracerouteMonitor     = TracerouteMonitor(interval: 60.0)
+    let connectorManager      = ConnectorManager()
+    let incidentManager:      IncidentManager
+    let bandwidthBudgetMonitor = BandwidthBudgetMonitor()
+    let speedTestMonitor:     SpeedTestMonitor
+    let remediationEngine     = RemediationEngine()
 
     // MARK: - Private
 
@@ -31,6 +34,7 @@ class NetworkMonitorService: ObservableObject {
         self.settings = s
         self.incidentManager = IncidentManager(baseDirectory: s.baseDirectory,
                                                cooldown: s.incidentCooldownSeconds)
+        self.speedTestMonitor = SpeedTestMonitor(baseDirectory: s.baseDirectory)
     }
 
     // MARK: - Lifecycle
@@ -55,6 +59,7 @@ class NetworkMonitorService: ObservableObject {
     }
 
     func restart() {
+        settings.save()   // persist before tearing down
         stop()
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -65,7 +70,9 @@ class NetworkMonitorService: ObservableObject {
     // MARK: - Settings
 
     func applySettings() {
-        settings.save()
+        // NOTE: save() is intentionally NOT called here.
+        // Settings are saved explicitly in restart() (user-initiated) to avoid
+        // overwriting persisted settings with an uninitialised default on cold launch.
 
         // Build ping states
         pingStates = settings.pingTargets.map { PingState(target: $0) }
@@ -86,6 +93,30 @@ class NetworkMonitorService: ObservableObject {
         // Device connectors
         connectorManager.load(configs: settings.connectorConfigs)
 
+        // Alerting
+        incidentManager.webhookURL = settings.webhookURL
+        incidentManager.healthScoreAlertThreshold = settings.alertOnHealthScoreBelow
+        bandwidthBudgetMonitor.resetAlertState()
+
+        // Speed test
+        speedTestMonitor.alertThresholdMbps = settings.speedTestAlertThresholdMbps
+        speedTestMonitor.webhookURL         = settings.webhookURL
+        speedTestMonitor.setBaseDirectory(settings.baseDirectory)
+
+        // Remediation
+        remediationEngine.isEnabled        = settings.remediationEnabled
+        remediationEngine.failThreshold    = settings.remediationFailThreshold
+        remediationEngine.backupDNS        = settings.remediationBackupDNS
+        remediationEngine.networkInterface = settings.networkInterface
+        remediationEngine.cooldownSeconds  = settings.incidentCooldownSeconds
+
+        // Wire bandwidth budget check into the poll cycle
+        let budgetMonitor = bandwidthBudgetMonitor
+        let currentSettings = settings
+        connectorManager.onPollComplete = { snapshots in
+            await budgetMonitor.check(snapshots: snapshots, settings: currentSettings)
+        }
+
         // Failure watcher
         failureWatcherTask?.cancel()
         failureWatcherTask = Task {
@@ -99,6 +130,9 @@ class NetworkMonitorService: ObservableObject {
     // MARK: - Incident detection
 
     private func checkForIncidents() {
+        // Run remediation evaluation first
+        remediationEngine.evaluate(pingStates: pingStates)
+
         // Grab latest connector snapshots for enrichment
         let connSnaps = connectorManager.allSnapshots
 

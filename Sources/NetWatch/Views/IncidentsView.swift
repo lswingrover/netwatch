@@ -2,6 +2,23 @@ import SwiftUI
 
 struct IncidentsView: View {
     @EnvironmentObject var incidentManager: IncidentManager
+    @EnvironmentObject var remediationEngine: RemediationEngine
+
+    var body: some View {
+        TabView {
+            IncidentListTab()
+                .tabItem { Label("Incidents", systemImage: "exclamationmark.triangle") }
+
+            RemediationLogTab()
+                .tabItem { Label("Remediation Log", systemImage: "wand.and.stars") }
+        }
+    }
+}
+
+// MARK: - Incidents list tab
+
+private struct IncidentListTab: View {
+    @EnvironmentObject var incidentManager: IncidentManager
     @State private var selectedID: UUID? = nil
 
     var selected: Incident? {
@@ -32,6 +49,99 @@ struct IncidentsView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+    }
+}
+
+// MARK: - Remediation log tab
+
+private struct RemediationLogTab: View {
+    @EnvironmentObject var remediationEngine: RemediationEngine
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Status banner
+            HStack(spacing: 12) {
+                if remediationEngine.isDNSFailoverActive {
+                    Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.orange)
+                    Text("DNS Failover Active").font(.callout).foregroundStyle(.orange)
+                } else {
+                    Image(systemName: "checkmark.circle").foregroundStyle(.green)
+                    Text("No active remediation").font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("\(remediationEngine.events.count) events")
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color(NSColor.controlBackgroundColor))
+
+            Divider()
+
+            if remediationEngine.events.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "wand.and.stars")
+                        .font(.largeTitle).foregroundStyle(.secondary)
+                    Text("No remediation actions yet")
+                        .foregroundStyle(.secondary)
+                    Text("Enable auto-remediation in Preferences → Alerting to start.")
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(remediationEngine.events.reversed()) { event in
+                    RemediationEventRow(event: event)
+                }
+                .listStyle(.plain)
+            }
+        }
+    }
+}
+
+private struct RemediationEventRow: View {
+    let event: RemediationEvent
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: iconName)
+                .foregroundStyle(iconColor)
+                .frame(width: 16)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(event.kind.rawValue)
+                        .font(.callout)
+                        .foregroundStyle(event.success ? Color.primary : Color.red)
+                    Spacer()
+                    Text(event.formattedDate)
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                Text(event.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var iconName: String {
+        switch event.kind {
+        case .dnsFailover: return "arrow.triangle.2.circlepath"
+        case .dnsRestored: return "checkmark.circle"
+        case .info:        return "info.circle"
+        }
+    }
+
+    private var iconColor: Color {
+        if !event.success { return .red }
+        switch event.kind {
+        case .dnsFailover: return .orange
+        case .dnsRestored: return .green
+        case .info:        return .secondary
         }
     }
 }
