@@ -20,6 +20,7 @@ class NetworkMonitorService: ObservableObject {
     let bandwidthBudgetMonitor = BandwidthBudgetMonitor()
     let speedTestMonitor:     SpeedTestMonitor
     let remediationEngine     = RemediationEngine()
+    let apiServer             = NetWatchAPIServer()
 
     // MARK: - Private
 
@@ -54,6 +55,7 @@ class NetworkMonitorService: ObservableObject {
         interfaceMonitor.stop()
         tracerouteMonitor.stop()
         connectorManager.stop()
+        apiServer.stop()
         failureWatcherTask?.cancel()
         failureWatcherTask = nil
     }
@@ -115,6 +117,14 @@ class NetworkMonitorService: ObservableObject {
         let currentSettings = settings
         connectorManager.onPollComplete = { snapshots in
             await budgetMonitor.check(snapshots: snapshots, settings: currentSettings)
+        }
+
+        // Mobile API server
+        apiServer.stop()
+        if settings.mobileAPIEnabled {
+            apiServer.port = settings.mobileAPIPort
+            wireAPIProviders()
+            apiServer.start()
         }
 
         // Failure watcher
@@ -188,6 +198,61 @@ class NetworkMonitorService: ObservableObject {
                 traceroute: nil,
                 connectorSnapshots: connSnaps
             )
+        }
+    }
+
+    // MARK: - Mobile API wiring
+
+    private func wireAPIProviders() {
+        // Snapshot provider: return all live connector snapshots
+        apiServer.snapshotProvider = { [weak self] in
+            self?.connectorManager.allSnapshots ?? []
+        }
+
+        // Status provider: current Mac interface state
+        apiServer.statusProvider = { [weak self] in
+            guard let self else {
+                return APIStatusPayload(macPublicIP: "", macLocalIP: "", wifiSSID: "",
+                                       gatewayRTT: nil, isMonitoring: false, appVersion: "–")
+            }
+            return APIStatusPayload(
+                macPublicIP:  self.interfaceMonitor.publicIP,
+                macLocalIP:   self.interfaceMonitor.ipAddress,
+                wifiSSID:     self.interfaceMonitor.wifiSSID,
+                gatewayRTT:   self.interfaceMonitor.gatewayRTT,
+                isMonitoring: self.isRunning,
+                appVersion:   "1.3.1"
+            )
+        }
+
+        // Health provider: overall network health
+        apiServer.healthProvider = { [weak self] in
+            guard let self else {
+                return APIHealthPayload(score: 0, status: "unknown", timestamp: "", layers: [:])
+            }
+            let status = self.overallStatus
+            let iso    = ISO8601DateFormatter().string(from: Date())
+            return APIHealthPayload(
+                score:     status == .healthy ? 90 : status == .degraded ? 60 : 20,
+                status:    status == .healthy ? "healthy" : status == .degraded ? "degraded" : "critical",
+                timestamp: iso,
+                layers:    [:]   // TODO: wire StackDiagnosisEngine in a future sprint
+            )
+        }
+
+        // Incident provider: recent incidents summary
+        apiServer.incidentProvider = { [weak self] in
+            guard let self else { return [] }
+            return self.incidentManager.incidents.prefix(10).map { incident in
+                let iso = ISO8601DateFormatter().string(from: incident.timestamp)
+                return APIIncidentSummary(
+                    id:          incident.id.uuidString,
+                    timestamp:   iso,
+                    healthScore: 0,               // Incident struct doesn't store health score at trigger
+                    rootCause:   incident.reason,
+                    severity:    "warning"         // Incident struct doesn't have severity
+                )
+            }
         }
     }
 

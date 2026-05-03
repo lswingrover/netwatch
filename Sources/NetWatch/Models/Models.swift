@@ -277,6 +277,14 @@ struct MonitorSettings: Codable {
     /// Fire a webhook when speed test download drops below this Mbps (0 = disabled).
     var speedTestAlertThresholdMbps: Double = 0
 
+    // MARK: Mobile API (Sprint 9)
+
+    /// Enable the local HTTP API server for NetWatch Mobile.
+    var mobileAPIEnabled: Bool = false
+
+    /// Port for the local HTTP API server (default 57821).
+    var mobileAPIPort: UInt16 = 57_821
+
     // MARK: Remediation (Sprint 11)
 
     /// Enable automated remediation actions (DNS failover, etc.).
@@ -353,6 +361,9 @@ extension MonitorSettings {
         remediationEnabled           = try c.decodeIfPresent(Bool.self,     forKey: .remediationEnabled)          ?? false
         remediationFailThreshold     = try c.decodeIfPresent(Int.self,      forKey: .remediationFailThreshold)    ?? 3
         remediationBackupDNS         = try c.decodeIfPresent([String].self, forKey: .remediationBackupDNS)        ?? ["9.9.9.9", "208.67.222.222"]
+        // Sprint 9 (Mobile API) fields
+        mobileAPIEnabled             = try c.decodeIfPresent(Bool.self,    forKey: .mobileAPIEnabled)             ?? false
+        mobileAPIPort                = try c.decodeIfPresent(UInt16.self,  forKey: .mobileAPIPort)                ?? 57_821
     }
 }
 

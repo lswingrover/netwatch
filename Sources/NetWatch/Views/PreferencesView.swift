@@ -864,6 +864,39 @@ struct AlertingTab: View {
                 Text("DNS Failover: when 1.1.1.1 and 8.8.8.8 are unreachable, switches system DNS to backup servers via networksetup. Restored automatically on recovery. Actions are logged in the Remediation Log (Incidents tab).")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
+            // ── Mobile API ─────────────────────────────────────────────────────
+            Section {
+                Toggle("Enable Mobile API server", isOn: $settings.mobileAPIEnabled)
+                    .help("Start a local HTTP JSON API so NetWatch Mobile (iOS) can query live status from the same LAN or via WireGuard VPN.")
+
+                if settings.mobileAPIEnabled {
+                    LabeledContent("Port") {
+                        HStack(spacing: 6) {
+                            TextField("57821", value: Binding(
+                                get: { Int(settings.mobileAPIPort) },
+                                set: { settings.mobileAPIPort = UInt16(max(1024, min(65535, $0))) }
+                            ), format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 70)
+                            Text("(default 57821)").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    // curl test snippet
+                    LabeledContent("Test") {
+                        Text("curl http://localhost:\(settings.mobileAPIPort)/health")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+            } header: {
+                Text("Mobile API (NetWatch iOS)")
+            } footer: {
+                Text("Exposes read-only JSON endpoints: /health, /connectors, /status, /incidents. The iOS companion app connects on LAN or via WireGuard VPN. No auth token required — WireGuard is the security boundary.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .frame(minWidth: 500)

@@ -85,6 +85,9 @@ struct ConnectorsView: View {
             } else if selectedID == "orbi" {
                 OrbiIntelligenceView()
                     .id("orbi")
+            } else if selectedID == "cm3000" {
+                CM3000IntelligenceView()
+                    .id("cm3000")
             } else if selectedID == "nighthawk" {
                 NighthawkIntelligenceView()
                     .id("nighthawk")

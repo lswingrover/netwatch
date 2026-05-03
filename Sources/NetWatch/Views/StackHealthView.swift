@@ -19,8 +19,15 @@ struct StackHealthView: View {
     @EnvironmentObject var connectorManager: ConnectorManager
     @EnvironmentObject var monitor:          NetworkMonitorService
 
-    @State private var diagnosis: StackDiagnosis? = nil
-    @State private var isRunning = false
+    @State private var diagnosis:         StackDiagnosis? = nil
+    @State private var isRunning:         Bool = false
+
+    // Manual report generation
+    @State private var showReportSheet:   Bool = false
+    @State private var reportNote:        String = ""
+    @State private var isGeneratingReport: Bool = false
+    @State private var lastReportURL:     URL? = nil
+    @State private var showReportDone:    Bool = false
 
     var body: some View {
         ScrollView {
@@ -41,6 +48,13 @@ struct StackHealthView: View {
         }
         .onAppear { if diagnosis == nil { runDiagnosis() } }
         .onChange(of: connectorManager.snapshots.count) { _, _ in runDiagnosis() }
+        .sheet(isPresented: $showReportSheet) { reportSheet }
+        .alert("Report Generated", isPresented: $showReportDone, presenting: lastReportURL) { url in
+            Button("Open in Finder") { NSWorkspace.shared.open(url) }
+            Button("OK", role: .cancel) { }
+        } message: { url in
+            Text("Incident bundle saved to:\n\(url.lastPathComponent)")
+        }
     }
 
     // MARK: - Sections
@@ -75,6 +89,18 @@ struct StackHealthView: View {
             }
             .buttonStyle(.bordered)
             .disabled(isRunning)
+
+            Button {
+                showReportSheet = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.text.magnifyingglass")
+                    Text("Generate Report")
+                        .font(.caption)
+                }
+            }
+            .buttonStyle(.bordered)
+            .help("Manually capture a full incident bundle — ping, DNS, traceroute, connector snapshots, and stack diagnosis")
         }
     }
 
@@ -171,6 +197,106 @@ struct StackHealthView: View {
                 .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, minHeight: 200)
+    }
+
+    // MARK: - Manual report sheet
+
+    private var reportSheet: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.title2).foregroundStyle(.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Generate Incident Report")
+                        .font(.headline)
+                    Text("Captures full stack state: ping, DNS, traceroute, connector snapshots, and stack diagnosis. Saved to ~/network_tests/incidents/")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Description (optional)")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextField("e.g. "Streaming buffering on Sonos", "VPN dropped", …", text: $reportNote)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if let d = diagnosis {
+                GroupBox {
+                    HStack(spacing: 12) {
+                        Text("\(d.healthScore)")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(d.healthScore >= 85 ? .green : d.healthScore >= 60 ? .yellow : .red)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(d.summary).font(.callout)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("Root cause: \(d.rootCause.rawValue) · \(d.confidence.rawValue) confidence")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                } label: {
+                    Text("Current diagnosis will be included")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+
+            HStack {
+                Button("Cancel", role: .cancel) {
+                    showReportSheet = false
+                    reportNote = ""
+                }
+                .keyboardShortcut(.escape)
+
+                Spacer()
+
+                Button {
+                    generateManualReport()
+                } label: {
+                    HStack(spacing: 6) {
+                        if isGeneratingReport {
+                            ProgressView().scaleEffect(0.7).frame(width: 14, height: 14)
+                        }
+                        Text(isGeneratingReport ? "Generating…" : "Generate Report")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isGeneratingReport)
+                .keyboardShortcut(.return)
+            }
+        }
+        .padding(24)
+        .frame(width: 480)
+    }
+
+    private func generateManualReport() {
+        guard !isGeneratingReport else { return }
+        isGeneratingReport = true
+
+        // Run a fresh diagnosis in parallel if we don't have one
+        if diagnosis == nil { runDiagnosis() }
+
+        Task {
+            let traceroute = monitor.tracerouteMonitor.results.values.first
+            let url = await monitor.incidentManager.triggerManualReport(
+                reason: "Stack Health",
+                note:   reportNote.isEmpty ? "Manually triggered from Stack Health" : reportNote,
+                pingStates:  monitor.pingStates,
+                dnsStates:   monitor.dnsStates,
+                traceroute:  traceroute,
+                connectorSnapshots: connectorManager.allSnapshots
+            )
+            await MainActor.run {
+                isGeneratingReport = false
+                showReportSheet    = false
+                reportNote         = ""
+                lastReportURL      = url
+                showReportDone     = url != nil
+            }
+        }
     }
 
     // MARK: - Logic

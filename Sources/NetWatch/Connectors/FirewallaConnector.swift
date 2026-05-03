@@ -72,6 +72,33 @@ struct FirewallaFlow: Identifiable {
     let isBlocked: Bool
 }
 
+/// A WireGuard VPN peer connected to the Firewalla home VPN server.
+struct FirewallaVPNPeer: Identifiable {
+    var id: String { pubkeyShort.isEmpty ? endpoint : pubkeyShort }
+
+    let pubkeyShort:   String    // first 8 chars of WG public key
+    let endpoint:      String    // last-seen IP:port, empty if not yet connected
+    let allowedIPs:    String    // e.g. "10.0.0.2/32"
+    let lastHandshake: Date?
+    let rxBytes:       Int       // bytes received from peer
+    let txBytes:       Int       // bytes sent to peer
+    let isActive:      Bool      // handshake within last 3 min
+
+    var lastHandshakeFormatted: String {
+        guard let ts = lastHandshake else { return "Never" }
+        let interval = -ts.timeIntervalSinceNow
+        if interval < 60     { return "Just now" }
+        if interval < 3600   { return "\(Int(interval / 60))m ago" }
+        if interval < 86400  { return "\(Int(interval / 3600))h ago" }
+        return "\(Int(interval / 86400))d ago"
+    }
+
+    var endpointIP: String {
+        // Strip port from "1.2.3.4:51820"
+        endpoint.components(separatedBy: ":").dropLast().joined(separator: ":")
+    }
+}
+
 /// A DNS domain with aggregated hit count.
 struct FirewallaDomain: Identifiable {
     var id: String { domain }
@@ -127,6 +154,23 @@ final class FirewallaConnector: DeviceConnector {
 
     /// Top DNS domains (last 24h, up to 30).
     private(set) var lastDomains: [FirewallaDomain] = []
+
+    // MARK: - VPN server state
+
+    /// WireGuard VPN server peers configured on the Firewalla.
+    private(set) var lastVPNPeers: [FirewallaVPNPeer] = []
+
+    /// Whether the WireGuard VPN server interface is present and active.
+    private(set) var vpnServerEnabled: Bool = false
+
+    /// WireGuard listen port (default 51820).
+    private(set) var vpnServerPort: Int = 0
+
+    /// Count of peers with a recent handshake (active tunnels).
+    private(set) var vpnActiveCount: Int = 0
+
+    /// Firewalla's current home public WAN IP (for away mode detection).
+    private(set) var homePublicIP: String = ""
 
     // MARK: - Init
 
@@ -188,12 +232,15 @@ final class FirewallaConnector: DeviceConnector {
                 value: 0, unit: pubIP))
         }
 
-        // Alarm count
+        // Alarm count — informational only. Most Firewalla alarms are benign notices
+        // (new device, geo-block activity, etc.) and should NOT drive the yellow warning
+        // dot in the connector list. Only CYBER_* alarm types rise to .warning/.critical,
+        // which is handled separately via the cyberEvents filter in assessFirewall().
         if let alarmCount = json["alarm_count"] as? Int {
             metrics.append(ConnectorMetric(
                 key: "active_alarms", label: "Active Alarms",
                 value: Double(alarmCount), unit: "",
-                severity: alarmCount > 0 ? .warning : .ok))
+                severity: alarmCount > 0 ? .info : .ok))
         }
 
         // Devices
@@ -254,7 +301,7 @@ final class FirewallaConnector: DeviceConnector {
             }
         }
 
-        // VPN active tunnel count
+        // VPN active tunnel count (client-side)
         if let vpn = json["vpn_status"] as? [String: Any] {
             let enabled = vpn["enabled"] as? Bool ?? false
             if enabled {
@@ -262,6 +309,27 @@ final class FirewallaConnector: DeviceConnector {
                 metrics.append(ConnectorMetric(
                     key: "vpn_tunnels", label: "VPN Tunnels",
                     value: Double(tunnelCount), unit: "active",
+                    severity: .ok))
+            }
+        }
+
+        // VPN server (WireGuard) metrics
+        if let vpnServer = json["vpn_server"] as? [String: Any],
+           vpnServer["enabled"] as? Bool == true {
+            let peerCount   = vpnServer["peer_count"]   as? Int ?? 0
+            let activeCount = vpnServer["active_count"] as? Int ?? 0
+            let port        = vpnServer["listen_port"]  as? Int ?? 51820
+            metrics.append(ConnectorMetric(
+                key: "vpn_server_enabled", label: "VPN Server",
+                value: 0, unit: "WireGuard :\(port)", severity: .ok))
+            metrics.append(ConnectorMetric(
+                key: "vpn_server_peers", label: "VPN Peers",
+                value: Double(peerCount), unit: peerCount == 1 ? "peer" : "peers",
+                severity: peerCount > 0 ? .ok : .info))
+            if activeCount > 0 {
+                metrics.append(ConnectorMetric(
+                    key: "vpn_server_active", label: "Active Tunnels",
+                    value: Double(activeCount), unit: "connected",
                     severity: .ok))
             }
         }
@@ -299,7 +367,11 @@ final class FirewallaConnector: DeviceConnector {
                 let atype   = alarm["type"]    as? String ?? "ALARM"
                 let device  = alarm["device"]  as? String ?? "?"
                 let message = alarm["message"] as? String ?? atype
-                let sev: MetricSeverity = alarm["severity"] as? String == "high" ? .critical : .warning
+                // Only high-severity CYBER_ alarms warrant .critical; all others are .info
+                // so that routine Firewalla notices don't trigger the yellow dot or firewall deductions.
+                let isCyber = atype.hasPrefix("CYBER_") || atype.hasPrefix("ALARM_CYBER")
+                let sev: MetricSeverity = alarm["severity"] as? String == "high" ? .critical
+                    : (isCyber ? .warning : .info)
                 let description = message.isEmpty ? "\(atype) — \(device)" : "\(device): \(message)"
                 events.append(ConnectorEvent(
                     timestamp: ts,
@@ -434,6 +506,39 @@ final class FirewallaConnector: DeviceConnector {
                       let count  = d["count"]  as? Int else { return nil }
                 return FirewallaDomain(domain: domain, count: count)
             }
+        }
+
+        // Home public IP (for away mode detection in UI)
+        homePublicIP = json["public_ip"] as? String ?? ""
+
+        // VPN server (WireGuard) peer data
+        if let vpnServer = json["vpn_server"] as? [String: Any] {
+            vpnServerEnabled = vpnServer["enabled"]      as? Bool ?? false
+            vpnServerPort    = vpnServer["listen_port"]  as? Int  ?? 51820
+            vpnActiveCount   = vpnServer["active_count"] as? Int  ?? 0
+
+            if let rawPeers = vpnServer["peers"] as? [[String: Any]] {
+                lastVPNPeers = rawPeers.map { p in
+                    let hsTs = (p["last_handshake"] as? Double) ?? 0
+                    let lastHandshake = hsTs > 0
+                        ? Date(timeIntervalSince1970: hsTs)
+                        : nil
+                    return FirewallaVPNPeer(
+                        pubkeyShort:   p["pubkey_short"] as? String ?? "",
+                        endpoint:      p["endpoint"]     as? String ?? "",
+                        allowedIPs:    p["allowed_ips"]  as? String ?? "",
+                        lastHandshake: lastHandshake,
+                        rxBytes:       p["rx_bytes"]     as? Int    ?? 0,
+                        txBytes:       p["tx_bytes"]     as? Int    ?? 0,
+                        isActive:      p["is_active"]    as? Bool   ?? false
+                    )
+                }
+            } else {
+                lastVPNPeers = []
+            }
+        } else {
+            vpnServerEnabled = false
+            lastVPNPeers     = []
         }
     }
 

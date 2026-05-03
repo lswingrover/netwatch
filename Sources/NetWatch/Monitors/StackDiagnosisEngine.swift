@@ -142,13 +142,15 @@ struct StackDiagnosisEngine {
         let layers: [LayerResult] = [internetLayer, ispLayer, modemLayer,
                                      firewallLayer, meshLayer, clientLayer]
 
-        // ── Root cause: innermost (deepest toward user) critical/degraded layer ─
-        // When no layer is degraded/critical, there is no root cause — use .unknown
-        // so the UI suppresses the root-cause badge. This prevents "Internet ← Root Cause"
-        // appearing on a fully-healthy network.
-        let problematic = layers.reversed().first {
-            $0.status == .critical || $0.status == .degraded
-        }
+        // ── Root cause: outermost (closest to ISP) critical layer, then outermost degraded ──
+        // When the ISP layer is Critical and the Modem is Degraded, the ISP is the root
+        // cause — the modem's degradation is downstream of it. Using reversed().first{}
+        // (innermost-first) was wrongly pinning "Cable Modem" as root cause when ISP was
+        // actually Critical. We now prefer the outermost Critical layer; if no Critical layer
+        // exists, fall back to the outermost Degraded layer. When all layers are healthy or
+        // unknown, there is no root cause — use .unknown so the UI suppresses the badge.
+        let problematic = layers.first { $0.status == .critical }
+            ?? layers.first { $0.status == .degraded }
         let rootResult: LayerResult
         if let p = problematic {
             rootResult = p
@@ -175,15 +177,12 @@ struct StackDiagnosisEngine {
             weightSum += w
             scoreSum  += Double(lr.score) * w
         }
-        // Additional deductions from raw probe data
-        var rawDeduction = 0
-        let overallPingLoss = avgPingLoss(pingStates)
-        rawDeduction += min(30, Int(overallPingLoss * 100))    // up to -30 for ping loss
-        let overallDNSFail = avgDNSFailure(dnsStates)
-        if overallDNSFail > 0.5 { rawDeduction += 20 }         // -20 for >50% DNS failure
-
+        // The weighted average already captures ping and DNS failure through the Internet
+        // and ISP layer scores — applying a separate rawDeduction for those same signals
+        // was double-counting and could drop the overall score by an additional -50 points
+        // on top of whatever the Internet layer already contributed. Removed.
         let rawScore = Int(scoreSum / max(1, weightSum))
-        let healthScore = max(0, min(100, rawScore - rawDeduction))
+        let healthScore = max(0, min(100, rawScore))
 
         // ── Confidence ────────────────────────────────────────────────────────
         let knownLayerCount = layers.filter { $0.status != .unknown }.count
@@ -268,12 +267,19 @@ struct StackDiagnosisEngine {
         var score = 100
         var status: LayerStatus = .unknown
 
+        // Track whether Firewalla directly confirms WAN is active.
+        // When it does, we trust that signal over ICMP probes — Firewalla rules commonly
+        // block outbound ICMP (ping) to public IPs, which would produce 100% ping loss
+        // even on a fully-working WAN.
+        var firewallConfirmsWANActive = false
+
         // Firewalla WAN state
         if let fw = firewalla {
             let wanMetrics = fw.metrics.filter { $0.key.hasPrefix("wan_") && !$0.key.contains("ip") }
             let anyActive  = wanMetrics.contains { $0.severity == .ok }
             let anyDown    = wanMetrics.contains { $0.severity == .critical }
             if anyActive {
+                firewallConfirmsWANActive = true
                 evidence.append("Firewalla WAN interface active")
                 status = .healthy
             } else if anyDown {
@@ -303,13 +309,22 @@ struct StackDiagnosisEngine {
         }
 
         // External ping loss to WAN targets (8.8.8.8, 1.1.1.1)
+        // When Firewalla confirms WAN is active, cap ping-loss status at .degraded —
+        // Firewalla may block outbound ICMP, producing spurious 100% ping loss that
+        // should NOT override a confirmed-active WAN interface.
         let wanPings = pingStates.filter { isPublicIP($0.target.host) }
         let wanLoss  = avgPingLoss(wanPings)
         if !wanPings.isEmpty {
             if wanLoss > 0.5 {
-                evidence.append(String(format: "WAN ping loss %.0f%%", wanLoss * 100))
-                score  -= Int(wanLoss * 40)
-                status  = max(status, .critical)
+                if firewallConfirmsWANActive {
+                    evidence.append(String(format: "WAN ping loss %.0f%% (ICMP may be filtered by Firewalla rules)", wanLoss * 100))
+                    score  -= Int(wanLoss * 15)   // reduced penalty — WAN confirmed active by Firewalla
+                    status  = max(status, .degraded)   // cap at degraded, not critical
+                } else {
+                    evidence.append(String(format: "WAN ping loss %.0f%%", wanLoss * 100))
+                    score  -= Int(wanLoss * 40)
+                    status  = max(status, .critical)
+                }
             } else if wanLoss > 0.1 {
                 evidence.append(String(format: "WAN ping loss %.0f%%", wanLoss * 100))
                 score  -= Int(wanLoss * 25)

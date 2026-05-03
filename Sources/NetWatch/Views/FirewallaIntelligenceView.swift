@@ -4,6 +4,7 @@
 /// Surfaced from ConnectorsView when the selected connector id == "firewalla".
 ///
 /// Tabs:
+///   Overview  — WAN status, device counts, alarms, top domain, VPN, bandwidth summary
 ///   Devices   — full device list (online status, bandwidth, vendor, pause toggle)
 ///   Flows     — recent network flows (last 30 min, blocked highlighted)
 ///   Domains   — top DNS domains (last 24h)
@@ -16,6 +17,7 @@ import SwiftUI
 struct FirewallaIntelligenceView: View {
 
     @EnvironmentObject var connectorManager: ConnectorManager
+    @EnvironmentObject var ifMonitor: InterfaceMonitor
 
     /// Convenience accessor — cast from the live connector list.
     private var firewalla: FirewallaConnector? {
@@ -26,7 +28,7 @@ struct FirewallaIntelligenceView: View {
         connectorManager.snapshot(for: "firewalla")
     }
 
-    @State private var tab: FWTab = .devices
+    @State private var tab: FWTab = .overview
     @State private var deviceFilter: DeviceFilter = .all
     @State private var searchText: String = ""
 
@@ -35,10 +37,12 @@ struct FirewallaIntelligenceView: View {
     @State private var showActionBanner = false
 
     enum FWTab: String, CaseIterable {
-        case devices = "Devices"
-        case flows   = "Flows"
-        case domains = "Domains"
-        case alarms  = "Alarms"
+        case overview = "Overview"
+        case devices  = "Devices"
+        case flows    = "Flows"
+        case domains  = "Domains"
+        case alarms   = "Alarms"
+        case vpn      = "VPN"
     }
 
     enum DeviceFilter: String, CaseIterable {
@@ -79,10 +83,12 @@ struct FirewallaIntelligenceView: View {
 
                 // Tab content
                 switch tab {
-                case .devices: devicesTab
-                case .flows:   flowsTab
-                case .domains: domainsTab
-                case .alarms:  alarmsTab
+                case .overview: overviewTab
+                case .devices:  devicesTab
+                case .flows:    flowsTab
+                case .domains:  domainsTab
+                case .alarms:   alarmsTab
+                case .vpn:      vpnTab
                 }
             } else {
                 loadingOrEmpty
@@ -182,6 +188,236 @@ struct FirewallaIntelligenceView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Overview tab
+
+    @ViewBuilder
+    private var overviewTab: some View {
+        if let snap = snapshot {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    networkStatusTiles(snap)
+                    securitySummary(snap)
+                    activitySummary(snap)
+                    Spacer(minLength: 40)
+                }
+                .padding(20)
+            }
+        } else {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Waiting for Firewalla data…").foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func networkStatusTiles(_ snap: ConnectorSnapshot) -> some View {
+        let fw = firewalla
+
+        // Pull key metrics from snapshot
+        let wanMetric   = snap.metrics.first(where: { $0.key.hasPrefix("wan_") && !$0.key.contains("ip") })
+        let pubIP       = snap.metrics.first(where: { $0.key == "public_ip" })?.unit ?? "–"
+        let totalDev    = Int(snap.metrics.first(where: { $0.key == "total_devices" })?.value ?? 0)
+        let onlineDev   = Int(snap.metrics.first(where: { $0.key == "online_devices" })?.value ?? 0)
+        let pausedDev   = Int(snap.metrics.first(where: { $0.key == "paused_devices" })?.value ?? 0)
+        let alarmCount  = Int(snap.metrics.first(where: { $0.key == "active_alarms" })?.value ?? 0)
+        let vpnTunnels  = Int(snap.metrics.first(where: { $0.key == "vpn_tunnels" })?.value ?? 0)
+        let uptimeH     = snap.metrics.first(where: { $0.key == "uptime_h" })?.value
+        let topBWName   = snap.metrics.first(where: { $0.key == "top_bw_name" })?.unit ?? "–"
+        let topBWMB     = snap.metrics.first(where: { $0.key == "top_bw_device" })?.value
+        let topDomain   = snap.metrics.first(where: { $0.key == "unique_domains" })?.unit ?? "–"
+        let blockedTotal = Int(snap.metrics.first(where: { $0.key == "total_blocked" })?.value ?? 0)
+
+        let wanActive = wanMetric?.severity == .ok
+        let wanLabel  = wanMetric?.unit.isEmpty == false ? wanMetric!.unit : (wanActive ? "up" : "down")
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Network Status")
+                .font(.headline)
+
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible()), count: 4),
+                spacing: 12
+            ) {
+                FWTile(icon: "network",
+                       label: "WAN",
+                       value: pubIP,
+                       unit: wanLabel,
+                       color: wanActive ? .green : .red)
+
+                FWTile(icon: "laptopcomputer.and.iphone",
+                       label: "Devices",
+                       value: "\(onlineDev) / \(totalDev)",
+                       unit: "online",
+                       color: .blue)
+
+                if pausedDev > 0 {
+                    FWTile(icon: "pause.circle.fill",
+                           label: "Paused",
+                           value: "\(pausedDev)",
+                           unit: "devices",
+                           color: .orange)
+                } else {
+                    FWTile(icon: "checkmark.circle.fill",
+                           label: "Paused",
+                           value: "None",
+                           unit: "",
+                           color: .green)
+                }
+
+                FWTile(icon: alarmCount > 0 ? "exclamationmark.shield.fill" : "checkmark.shield.fill",
+                       label: "Alarms",
+                       value: alarmCount > 0 ? "\(alarmCount)" : "None",
+                       unit: alarmCount > 0 ? "active" : "",
+                       color: alarmCount > 0 ? .orange : .green)
+
+                FWTile(icon: "globe",
+                       label: "Top Domain",
+                       value: topDomain.isEmpty ? "–" : topDomain,
+                       unit: "",
+                       color: .blue)
+
+                if blockedTotal > 0 {
+                    FWTile(icon: "xmark.shield",
+                           label: "Blocked",
+                           value: blockedTotal >= 1000
+                               ? String(format: "%.1fK", Double(blockedTotal) / 1000)
+                               : "\(blockedTotal)",
+                           unit: "requests",
+                           color: .purple)
+                }
+
+                if vpnTunnels > 0 {
+                    FWTile(icon: "lock.shield.fill",
+                           label: "VPN",
+                           value: "\(vpnTunnels)",
+                           unit: vpnTunnels == 1 ? "tunnel" : "tunnels",
+                           color: .green)
+                }
+
+                if let uptime = uptimeH {
+                    let uptimeStr: String = {
+                        if uptime >= 24 { return String(format: "%.0fd", uptime / 24) }
+                        return String(format: "%.0fh", uptime)
+                    }()
+                    FWTile(icon: "clock.fill",
+                           label: "Uptime",
+                           value: uptimeStr,
+                           unit: "",
+                           color: .secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func securitySummary(_ snap: ConnectorSnapshot) -> some View {
+        let cyberAlarms = snap.events.filter { $0.type == "alarm" && $0.severity == .critical }
+        let warnAlarms  = snap.events.filter { $0.type == "alarm" && $0.severity == .warning }
+        let infoAlarms  = snap.events.filter { $0.type == "alarm" && $0.severity == .info }
+
+        if !snap.events.filter({ $0.type == "alarm" }).isEmpty || !snap.events.filter({ $0.type == "blocked_flow" }).isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Security")
+                    .font(.headline)
+
+                if cyberAlarms.isEmpty && warnAlarms.isEmpty && infoAlarms.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)
+                        Text("No security alarms").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.green.opacity(0.06)))
+                } else {
+                    ForEach(Array((cyberAlarms + warnAlarms).prefix(3).enumerated()), id: \.offset) { _, ev in
+                        HStack(alignment: .top, spacing: 8) {
+                            Rectangle().fill(ev.severity == .critical ? Color.red : Color.orange)
+                                .frame(width: 3).cornerRadius(2)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(ev.type.uppercased().replacingOccurrences(of: "_", with: " "))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                Text(ev.description).font(.caption).lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                            Text(ev.timestamp, style: .time)
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        .padding(10)
+                        .background(RoundedRectangle(cornerRadius: 8)
+                            .fill((ev.severity == .critical ? Color.red : Color.orange).opacity(0.06)))
+                    }
+                    if infoAlarms.count > 0 {
+                        Text("\(infoAlarms.count) informational alarm(s) — view in Alarms tab")
+                            .font(.caption).foregroundStyle(.secondary).padding(.top, 2)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func activitySummary(_ snap: ConnectorSnapshot) -> some View {
+        let fw = firewalla
+        let topFlows   = Array((fw?.lastFlows ?? []).prefix(5))
+        let topDomains = Array((fw?.lastDomains ?? []).prefix(5))
+
+        if !topFlows.isEmpty || !topDomains.isEmpty {
+            HStack(alignment: .top, spacing: 16) {
+                // Recent flows mini-list
+                if !topFlows.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Recent Flows").font(.headline)
+                        ForEach(topFlows) { flow in
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(flow.isBlocked ? Color.red : Color.blue)
+                                    .frame(width: 5, height: 5)
+                                Text(flow.domain.isEmpty ? flow.ip : flow.domain)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .lineLimit(1)
+                                Spacer()
+                                Text(flow.device.isEmpty ? flow.mac : flow.device)
+                                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        Button("See all flows") { tab = .flows }
+                            .buttonStyle(.plain).font(.caption).foregroundStyle(.blue).padding(.top, 2)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+
+                // Top domains mini-list
+                if !topDomains.isEmpty {
+                    let maxCount = Double(topDomains.first?.count ?? 1)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Top Domains").font(.headline)
+                        ForEach(topDomains) { domain in
+                            HStack(spacing: 6) {
+                                let fraction = CGFloat(domain.count) / CGFloat(maxCount)
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color.blue.opacity(0.5))
+                                    .frame(width: max(4, 60 * fraction), height: 6)
+                                Text(domain.domain)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(domain.count)").font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                        Button("See all domains") { tab = .domains }
+                            .buttonStyle(.plain).font(.caption).foregroundStyle(.blue).padding(.top, 2)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 10)
+                .fill(Color(NSColor.controlBackgroundColor)))
+        }
     }
 
     // MARK: - Devices tab
@@ -434,6 +670,224 @@ struct FirewallaIntelligenceView: View {
         }
     }
 
+    // MARK: - VPN tab
+
+    @ViewBuilder
+    private var vpnTab: some View {
+        let fw          = firewalla
+        let peers       = fw?.lastVPNPeers ?? []
+        let homeIP      = fw?.homePublicIP ?? ""
+        let macIP       = ifMonitor.publicIP
+        let awayMode    = !macIP.isEmpty && !homeIP.isEmpty && macIP != homeIP
+        let serverOn    = fw?.vpnServerEnabled ?? false
+        let serverPort  = fw?.vpnServerPort ?? 51820
+        let activeCount = fw?.vpnActiveCount ?? 0
+
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+
+                // ── Away / Home mode banner ───────────────────────────────────
+                Group {
+                    if macIP.isEmpty || homeIP.isEmpty {
+                        vpnBanner(
+                            icon: "questionmark.circle",
+                            title: "Location unknown",
+                            detail: macIP.isEmpty
+                                ? "This Mac's public IP is still resolving…"
+                                : "Firewalla public IP unavailable",
+                            color: .secondary
+                        )
+                    } else if awayMode {
+                        vpnBanner(
+                            icon: "wifi.slash",
+                            title: "Away Mode — off home network",
+                            detail: "This Mac: \(macIP)  ·  Home WAN: \(homeIP)",
+                            color: .orange
+                        )
+                    } else {
+                        vpnBanner(
+                            icon: "house.fill",
+                            title: "Home Network",
+                            detail: "This Mac and Firewalla share the same public IP: \(homeIP)",
+                            color: .green
+                        )
+                    }
+                }
+
+                // ── WireGuard server status ───────────────────────────────────
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("VPN Server")
+                        .font(.headline)
+
+                    HStack(spacing: 16) {
+                        vpnStatusTile(
+                            icon: serverOn ? "lock.shield.fill" : "lock.shield",
+                            label: "WireGuard",
+                            value: serverOn ? "Running" : "Not detected",
+                            color: serverOn ? .green : .secondary
+                        )
+                        if serverOn {
+                            vpnStatusTile(
+                                icon: "antenna.radiowaves.left.and.right",
+                                label: "Listen Port",
+                                value: "UDP \(serverPort)",
+                                color: .blue
+                            )
+                            vpnStatusTile(
+                                icon: "person.2.fill",
+                                label: "Peers",
+                                value: "\(peers.count) configured",
+                                color: .primary
+                            )
+                            vpnStatusTile(
+                                icon: "checkmark.circle.fill",
+                                label: "Active Now",
+                                value: activeCount > 0 ? "\(activeCount) connected" : "None",
+                                color: activeCount > 0 ? .green : .secondary
+                            )
+                        }
+                    }
+
+                    if !serverOn {
+                        Text("WireGuard server not detected. NetWatch reads `wg show all dump` via SSH. The Firewalla pi user may need sudo access or the VPN server may not be configured.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                // ── Peer list ─────────────────────────────────────────────────
+                if serverOn && !peers.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Peers")
+                            .font(.headline)
+
+                        // Column header
+                        HStack(spacing: 0) {
+                            Text("Status")  .frame(width: 56, alignment: .center)
+                            Text("Key")     .frame(width: 80, alignment: .leading)
+                            Text("Client IP").frame(width: 110, alignment: .leading)
+                            Text("Endpoint").frame(maxWidth: .infinity, alignment: .leading)
+                            Text("↓ Rx")   .frame(width: 75, alignment: .trailing)
+                            Text("↑ Tx")   .frame(width: 75, alignment: .trailing)
+                            Text("Handshake").frame(width: 90, alignment: .trailing)
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(Color(NSColor.windowBackgroundColor))
+                        .cornerRadius(6)
+
+                        Divider()
+
+                        ForEach(peers) { peer in
+                            VPNPeerRow(peer: peer)
+                            Divider().padding(.leading, 56)
+                        }
+                    }
+                } else if serverOn && peers.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.crop.circle.badge.questionmark")
+                            .foregroundStyle(.secondary)
+                        Text("No peers configured yet. Add a WireGuard peer in the Firewalla app to enable remote access.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(14)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
+                }
+
+                // ── VPN usage guide (always shown) ────────────────────────────
+                if awayMode {
+                    vpnConnectGuide(homeIP: homeIP, port: serverPort)
+                }
+
+                Spacer(minLength: 40)
+            }
+            .padding(20)
+        }
+    }
+
+    private func vpnBanner(icon: String, title: String, detail: String, color: Color) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(color)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(color == .secondary ? .primary : color)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(color == .secondary
+                      ? Color(NSColor.controlBackgroundColor)
+                      : color.opacity(0.08))
+        )
+    }
+
+    private func vpnStatusTile(icon: String, label: String, value: String, color: Color) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundStyle(color)
+            Text(value)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+    }
+
+    private func vpnConnectGuide(homeIP: String, port: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("You're away — here's how to connect", systemImage: "info.circle")
+                .font(.subheadline)
+                .foregroundStyle(.orange)
+            Text("Open the WireGuard app and activate your home profile. Your Firewalla's WireGuard server is at \(homeIP.isEmpty ? "[home IP]" : homeIP):\(port). Once connected, NetWatch will continue working normally through the tunnel.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if !homeIP.isEmpty {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(homeIP, forType: .string)
+                } label: {
+                    Label("Copy home IP", systemImage: "doc.on.clipboard")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.orange.opacity(0.06))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.orange.opacity(0.2), lineWidth: 1)
+                )
+        )
+    }
+
     // MARK: - Action dispatch
 
     private func performFirewallaAction(_ action: FirewallaAction, fw: FirewallaConnector?) {
@@ -455,6 +909,45 @@ struct FirewallaIntelligenceView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - FW Tile (Overview tab building block)
+
+private struct FWTile: View {
+    let icon:  String
+    let label: String
+    let value: String
+    let unit:  String
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 18))
+                .foregroundStyle(color)
+            Text(value)
+                .font(.system(.subheadline, design: .monospaced))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            if !unit.isEmpty {
+                Text(unit)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(NSColor.controlBackgroundColor))
+                .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
+        )
     }
 }
 
@@ -653,6 +1146,89 @@ private struct DomainRow: View {
             Button("Copy Domain") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(domain.domain, forType: .string)
+            }
+        }
+    }
+}
+
+// MARK: - VPN Peer Row
+
+private struct VPNPeerRow: View {
+    let peer: FirewallaVPNPeer
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Active / inactive indicator
+            ZStack {
+                Circle()
+                    .fill(peer.isActive ? Color.green : Color(NSColor.tertiaryLabelColor))
+                    .frame(width: 7, height: 7)
+                if peer.isActive {
+                    Circle()
+                        .fill(Color.green.opacity(0.25))
+                        .frame(width: 14, height: 14)
+                }
+            }
+            .frame(width: 56, alignment: .center)
+
+            // Pubkey short
+            Text(peer.pubkeyShort.isEmpty ? "–" : peer.pubkeyShort + "…")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(peer.isActive ? .primary : .secondary)
+                .frame(width: 80, alignment: .leading)
+
+            // Allowed IPs (client-side tunnel IP)
+            Text(peer.allowedIPs.isEmpty ? "–" : peer.allowedIPs)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 110, alignment: .leading)
+
+            // Endpoint IP (last seen public IP)
+            Text(peer.endpoint.isEmpty ? "–" : peer.endpoint)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Rx bytes
+            Text(FirewallaDevice.formatBytes(peer.rxBytes))
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 75, alignment: .trailing)
+
+            // Tx bytes
+            Text(FirewallaDevice.formatBytes(peer.txBytes))
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 75, alignment: .trailing)
+
+            // Last handshake
+            Text(peer.lastHandshakeFormatted)
+                .font(.caption2)
+                .foregroundStyle(peer.isActive ? .green : .secondary)
+                .frame(width: 90, alignment: .trailing)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(peer.isActive ? Color.green.opacity(0.04) : Color.clear)
+        .contextMenu {
+            if !peer.allowedIPs.isEmpty {
+                Button("Copy Tunnel IP") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(peer.allowedIPs, forType: .string)
+                }
+            }
+            if !peer.endpoint.isEmpty {
+                Button("Copy Endpoint") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(peer.endpoint, forType: .string)
+                }
+            }
+            if !peer.pubkeyShort.isEmpty {
+                Button("Copy Public Key (short)") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(peer.pubkeyShort, forType: .string)
+                }
             }
         }
     }

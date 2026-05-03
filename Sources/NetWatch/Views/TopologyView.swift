@@ -47,6 +47,9 @@ struct TopologyEdge {
     let from: String    // node id
     let to:   String    // node id
     var isDashed: Bool = false
+    /// Optional traffic annotation shown as a pill label at the mid-point of the edge.
+    /// E.g. "↓ 1.2 GB  ↑ 456 MB" or "3 clients" or "~4 ms"
+    var trafficLabel: String? = nil
 }
 
 // MARK: - View
@@ -88,7 +91,7 @@ struct TopologyView: View {
         let maxY = (nodes.map(\.position.y).max() ?? 400) + nodeH / 2 + 20
 
         return ZStack {
-            // Draw edges first (behind nodes)
+            // Draw edges first (behind everything)
             Canvas { ctx, _ in
                 for edge in edges {
                     guard let from = nodes.first(where: { $0.id == edge.from }),
@@ -96,6 +99,20 @@ struct TopologyView: View {
                     drawEdge(ctx: &ctx, from: from.position, to: to.position,
                              color: edgeColor(fromNode: from, toNode: to),
                              dashed: edge.isDashed)
+                }
+            }
+
+            // Edge traffic label pills — above edges, below nodes
+            ForEach(Array(edges.enumerated()), id: \.offset) { _, edge in
+                if let label = edge.trafficLabel,
+                   let fromNode = nodes.first(where: { $0.id == edge.from }),
+                   let toNode   = nodes.first(where: { $0.id == edge.to }) {
+                    let mid = CGPoint(
+                        x: (fromNode.position.x + toNode.position.x) / 2,
+                        y: (fromNode.position.y + toNode.position.y) / 2
+                    )
+                    EdgeLabelView(label: label)
+                        .position(mid)
                 }
             }
 
@@ -137,16 +154,55 @@ struct TopologyView: View {
 
     private func drawEdge(ctx: inout GraphicsContext, from: CGPoint, to: CGPoint,
                           color: Color, dashed: Bool = false) {
-        var path = Path()
-        path.move(to: from)
         let mid   = CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2)
         let ctrl1 = CGPoint(x: mid.x, y: from.y)
         let ctrl2 = CGPoint(x: mid.x, y: to.y)
+
+        // ── Edge curve ────────────────────────────────────────────────────────
+        var path = Path()
+        path.move(to: from)
         path.addCurve(to: to, control1: ctrl1, control2: ctrl2)
         let style: StrokeStyle = dashed
             ? StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [6, 4])
             : StrokeStyle(lineWidth: 2,   lineCap: .round)
         ctx.stroke(path, with: .color(color.opacity(0.5)), style: style)
+
+        // ── Arrowhead at `to` ─────────────────────────────────────────────────
+        // Tangent at end of Bezier = direction from ctrl2 → to
+        var dx = to.x - ctrl2.x
+        var dy = to.y - ctrl2.y
+        let len = sqrt(dx * dx + dy * dy)
+        if len < 0.5 {
+            // Degenerate (nodes in same column): fall back to from→to direction
+            let totalLen = sqrt(pow(to.x - from.x, 2) + pow(to.y - from.y, 2))
+            if totalLen > 0.5 {
+                dx = (to.x - from.x) / totalLen
+                dy = (to.y - from.y) / totalLen
+            } else {
+                dx = 0; dy = 1  // default down
+            }
+        } else {
+            dx /= len; dy /= len
+        }
+
+        // Place arrowhead tip at the node's edge (backing off nodeRadius from centre)
+        let nodeRadius: CGFloat = 26
+        let tipX = to.x - dx * nodeRadius
+        let tipY = to.y - dy * nodeRadius
+        let arrowLen:   CGFloat = 8
+        let arrowHalf:  CGFloat = 4.5
+        let baseX = tipX - dx * arrowLen
+        let baseY = tipY - dy * arrowLen
+        // Perpendicular unit vector (-dy, dx)
+        let lx = baseX - dy * arrowHalf;  let ly = baseY + dx * arrowHalf
+        let rx = baseX + dy * arrowHalf;  let ry = baseY - dx * arrowHalf
+
+        var arrow = Path()
+        arrow.move(to: CGPoint(x: tipX, y: tipY))
+        arrow.addLine(to: CGPoint(x: lx, y: ly))
+        arrow.addLine(to: CGPoint(x: rx, y: ry))
+        arrow.closeSubpath()
+        ctx.fill(arrow, with: .color(color.opacity(dashed ? 0.4 : 0.65)))
     }
 
     private func edgeColor(fromNode: TopologyNode, toNode: TopologyNode) -> Color {
@@ -218,22 +274,30 @@ struct TopologyView: View {
         row += 1
 
         // ── Orbi Router ───────────────────────────────────────────────────────
-        let orbi       = connectorManager.connectors.first(where: { $0.id == "orbi" }) as? OrbiConnector
-        let orbiStatus = connectorStatus(id: "orbi")
+        let orbi        = connectorManager.connectors.first(where: { $0.id == "orbi" }) as? OrbiConnector
+        let orbiStatus  = connectorStatus(id: "orbi")
         let orbiSummary = orbi?.lastRouterSummary
-        let orbiSub    = orbiSummary.map { "WAN \($0.wanIP.isEmpty ? "–" : $0.wanIP)" } ?? ""
+        let orbiSub     = orbiSummary.map { "WAN \($0.wanIP.isEmpty ? "–" : $0.wanIP)" } ?? ""
         var orbiNode = TopologyNode(
             id: "orbi", label: "Orbi", sublabel: orbiSub,
             icon: "wifi.router.fill", status: orbiStatus)
         orbiNode.position = colCenter(row: row, col: 0, ofCols: 1)
         nodes.append(orbiNode)
-        edges.append(TopologyEdge(from: "firewalla", to: "orbi"))
+
+        // Firewalla→Orbi: annotate with Orbi's WAN traffic meter (today's total)
+        let orbiSnap = connectorManager.snapshot(for: "orbi")
+        let todayRX  = orbiSnap?.metrics.first(where: { $0.key == "today_rx_mb" })?.value
+        let todayTX  = orbiSnap?.metrics.first(where: { $0.key == "today_tx_mb" })?.value
+        let wanLabel: String? = (todayRX != nil || todayTX != nil)
+            ? "↓ \(trafficMBString(todayRX ?? 0))  ↑ \(trafficMBString(todayTX ?? 0)) today"
+            : nil
+        edges.append(TopologyEdge(from: "firewalla", to: "orbi", trafficLabel: wanLabel))
         row += 1
 
         // ── Leaf row: Satellites + This Mac ──────────────────────────────────
-        let satellites = orbi?.lastSatellites ?? []
+        let satellites  = orbi?.lastSatellites ?? []
         let totalLeaves = satellites.count + 1  // +1 for This Mac
-        let leafRow = row
+        let leafRow     = row
 
         for (i, sat) in satellites.enumerated() {
             let satID = "sat_\(sat.mac)"
@@ -245,7 +309,11 @@ struct TopologyView: View {
                 status: sat.isOnline ? .healthy : .offline)
             satNode.position = colCenter(row: leafRow, col: i, ofCols: totalLeaves)
             nodes.append(satNode)
-            edges.append(TopologyEdge(from: "orbi", to: satID))
+            // Satellite edge: show client count as annotation
+            let satLabel = sat.clientCount > 0
+                ? "\(sat.clientCount) client\(sat.clientCount == 1 ? "" : "s")"
+                : nil
+            edges.append(TopologyEdge(from: "orbi", to: satID, trafficLabel: satLabel))
         }
 
         // This Mac node
@@ -262,9 +330,26 @@ struct TopologyView: View {
             icon: "laptopcomputer", status: .healthy)
         macNode.position = colCenter(row: leafRow, col: satellites.count, ofCols: totalLeaves)
         nodes.append(macNode)
-        edges.append(TopologyEdge(from: "orbi", to: "this_mac", isDashed: true))
+
+        // Orbi→This Mac: annotate with live interface throughput
+        let rxRate = ifMonitor.currentRate.rxBytesPerSec
+        let txRate = ifMonitor.currentRate.txBytesPerSec
+        let macTrafficLabel: String? = (rxRate > 500 || txRate > 500)
+            ? "↓ \(rxRate.humanBytes)/s  ↑ \(txRate.humanBytes)/s"
+            : nil
+        edges.append(TopologyEdge(from: "orbi", to: "this_mac",
+                                  isDashed: true, trafficLabel: macTrafficLabel))
 
         return (nodes, edges)
+    }
+
+    // MARK: - Helpers
+
+    /// Format megabytes for edge labels — shows GB when ≥ 1000 MB.
+    private func trafficMBString(_ mb: Double) -> String {
+        if mb >= 1000 { return String(format: "%.1f GB", mb / 1000) }
+        if mb >= 1    { return String(format: "%.0f MB", mb) }
+        return "< 1 MB"
     }
 
     // MARK: - ISP Hop extraction
@@ -329,6 +414,31 @@ struct TopologyView: View {
         if criticalCount > 0 { return .critical }
         if warnCount > 0     { return .degraded  }
         return .healthy
+    }
+}
+
+// MARK: - Edge Label View
+
+/// A small pill label that floats at the midpoint of a topology edge.
+private struct EdgeLabelView: View {
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 9, design: .monospaced))
+            .foregroundStyle(Color(NSColor.secondaryLabelColor))
+            .lineLimit(1)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .fill(Color(NSColor.windowBackgroundColor).opacity(0.92))
+                    .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+            )
+            .overlay(
+                Capsule()
+                    .strokeBorder(Color(NSColor.separatorColor).opacity(0.4), lineWidth: 0.5)
+            )
     }
 }
 

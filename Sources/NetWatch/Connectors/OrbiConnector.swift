@@ -57,6 +57,32 @@ struct OrbiRouterSummary {
     var firmwareUpdate: String = ""   // non-empty = update available
 }
 
+/// A single client device associated with one AP node in the Orbi mesh.
+struct OrbiClientEntry: Identifiable {
+    var id: String { mac.isEmpty ? "\(name)-\(ip)" : mac }
+
+    let name:           String   ///< Friendly name from GetAttachDevice2 <Name>
+    let mac:            String   ///< Uppercase MAC address
+    let ip:             String   ///< LAN IP
+    let connectionType: String   ///< Raw ConnectionType string from firmware
+    let connAPMAC:      String   ///< Uppercase MAC of the AP this device is on
+
+    /// Short human-readable band label.
+    var bandLabel: String {
+        let lc = connectionType.lowercased()
+        if lc.contains("6")   { return "6 GHz" }
+        if lc.contains("5")   { return "5 GHz" }
+        if lc.contains("2.4") { return "2.4 GHz" }
+        if lc.contains("eth") { return "Ethernet" }
+        return connectionType.isEmpty ? "Wi-Fi" : connectionType
+    }
+    /// SF symbol for the connection medium.
+    var bandIcon: String {
+        connectionType.lowercased().contains("eth")
+            ? "cable.connector.horizontal" : "wifi"
+    }
+}
+
 // MARK: - Connector
 
 final class OrbiConnector: DeviceConnector {
@@ -79,6 +105,12 @@ final class OrbiConnector: DeviceConnector {
 
     /// Parsed router summary from last successful snapshot.
     private(set) var lastRouterSummary: OrbiRouterSummary = OrbiRouterSummary()
+
+    /// Clients grouped by the AP MAC they are connected to (router + satellites).
+    private(set) var lastClientsByAP: [String: [OrbiClientEntry]] = [:]
+
+    /// MAC address of the router's AP (the "primary" node).
+    private(set) var routerAPMAC: String = ""
 
     /// Session cookie obtained from SOAPLogin. Cleared on auth error.
     private var sessionCookie: String? = nil
@@ -214,11 +246,12 @@ final class OrbiConnector: DeviceConnector {
         // Collect unique AP MACs so we can infer satellite count
         var apMacClientCount: [String: Int] = [:]   // AP MAC → number of clients on it
         var apMacSample:      [String: (name: String, band: String)] = [:]
+        var clientsByAP:      [String: [OrbiClientEntry]] = [:]
 
         for dev in deviceBlocks {
-            let connAP = (dev["ConnAPMAC"] ?? "").uppercased()
-            let conn   = dev["ConnectionType"] ?? ""
-            let name   = dev["Name"] ?? dev["MAC"] ?? "Unknown"
+            let connAP    = (dev["ConnAPMAC"] ?? "").uppercased()
+            let conn      = dev["ConnectionType"] ?? ""
+            let name      = dev["Name"] ?? dev["DeviceName"] ?? dev["MAC"] ?? "Unknown"
             let connLower = conn.lowercased()
 
             totalClients += 1
@@ -231,14 +264,25 @@ final class OrbiConnector: DeviceConnector {
                 if apMacSample[connAP] == nil {
                     apMacSample[connAP] = (name: name, band: connLower)
                 }
+
+                // Build per-AP client entry list
+                let entry = OrbiClientEntry(
+                    name:           name,
+                    mac:            (dev["MAC"] ?? "").uppercased(),
+                    ip:             dev["IP"] ?? dev["IPAddress"] ?? "",
+                    connectionType: conn,
+                    connAPMAC:      connAP
+                )
+                clientsByAP[connAP, default: []].append(entry)
             }
         }
 
         // Each unique ConnAPMAC is an AP node (router or satellite).
         // The router is the node with the most clients OR with 6 GHz clients (heuristic).
         // We label the non-router APs as satellites, ordered by client count descending.
-        if apMacClientCount.count > 1 {
-            // Identify the primary router AP: highest client count wins; 6GHz clients are tie-breaker
+        // Always identify the router AP MAC (even when only one AP is present).
+        var identifiedRouterAPMAC = ""
+        if !apMacClientCount.isEmpty {
             let sortedAPs = apMacClientCount.sorted { a, b in
                 if a.value != b.value { return a.value > b.value }
                 // Prefer the AP that has a 6GHz client (more likely to be the router)
@@ -248,18 +292,20 @@ final class OrbiConnector: DeviceConnector {
                                      .contains { ($0["ConnectionType"] ?? "").contains("6") }
                 return a6 && !b6
             }
-            let routerAPMac = sortedAPs.first?.key ?? ""
+            identifiedRouterAPMAC = sortedAPs.first?.key ?? ""
 
-            for (apMAC, clientCount) in apMacClientCount where apMAC != routerAPMac {
-                let macSuffix = apMAC.components(separatedBy: ":").suffix(2).joined(separator: ":")
-                parsedSats.append(OrbiSatellite(
-                    mac:          apMAC,
-                    name:         "Satellite (\(macSuffix))",
-                    ip:           "",
-                    backhaulBand: "",   // not determinable from client-side data
-                    clientCount:  clientCount,
-                    isOnline:     true
-                ))
+            if apMacClientCount.count > 1 {
+                for (apMAC, clientCount) in apMacClientCount where apMAC != identifiedRouterAPMAC {
+                    let macSuffix = apMAC.components(separatedBy: ":").suffix(2).joined(separator: ":")
+                    parsedSats.append(OrbiSatellite(
+                        mac:          apMAC,
+                        name:         "Satellite (\(macSuffix))",
+                        ip:           "",
+                        backhaulBand: "",   // not determinable from client-side data
+                        clientCount:  clientCount,
+                        isOnline:     true
+                    ))
+                }
             }
         }
 
@@ -376,6 +422,8 @@ final class OrbiConnector: DeviceConnector {
         summary2.firmwareUpdate = fwUpdateAvail ? newFWVersion : ""
         lastRouterSummary = summary2
         lastSatellites    = parsedSats
+        lastClientsByAP   = clientsByAP
+        routerAPMAC       = identifiedRouterAPMAC
 
         isConnected  = true
         lastError    = nil

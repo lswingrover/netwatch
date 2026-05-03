@@ -25,6 +25,7 @@ struct OrbiIntelligenceView: View {
 
     enum OrbiTab: String, CaseIterable {
         case overview = "Overview"
+        case clients  = "Clients"
         case metrics  = "Metrics"
         case events   = "Events"
         case history  = "History"
@@ -53,6 +54,7 @@ struct OrbiIntelligenceView: View {
                 // Tab content
                 switch tab {
                 case .overview: overviewTab
+                case .clients:  clientsTab
                 case .metrics:  metricsTab
                 case .events:   eventsTab
                 case .history:  ConnectorTimelineView(connectorId: "orbi")
@@ -124,6 +126,130 @@ struct OrbiIntelligenceView: View {
                 Spacer(minLength: 40)
             }
             .padding(20)
+        }
+    }
+
+    // MARK: - Clients tab
+
+    @ViewBuilder
+    private var clientsTab: some View {
+        if let orbi, !orbi.lastClientsByAP.isEmpty {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    clientsNodeSection(
+                        apMAC:    orbi.routerAPMAC,
+                        nodeName: "Router",
+                        nodeIcon: "wifi.router.fill",
+                        clients:  orbi.lastClientsByAP[orbi.routerAPMAC] ?? [],
+                        isRouter: true
+                    )
+
+                    ForEach(orbi.lastSatellites) { sat in
+                        clientsNodeSection(
+                            apMAC:    sat.mac,
+                            nodeName: sat.name,
+                            nodeIcon: "wifi",
+                            clients:  orbi.lastClientsByAP[sat.mac] ?? [],
+                            isRouter: false
+                        )
+                    }
+
+                    // Any AP MACs not matched to router or known satellites
+                    let knownMACs = Set(([orbi.routerAPMAC] + orbi.lastSatellites.map(\.mac))
+                                         .map { $0.uppercased() })
+                    let unknownAPs = orbi.lastClientsByAP.keys.filter {
+                        !knownMACs.contains($0.uppercased())
+                    }.sorted()
+                    ForEach(unknownAPs, id: \.self) { apMAC in
+                        let suffix = apMAC.components(separatedBy: ":").suffix(2).joined(separator: ":")
+                        clientsNodeSection(
+                            apMAC:    apMAC,
+                            nodeName: "Node (\(suffix))",
+                            nodeIcon: "wifi",
+                            clients:  orbi.lastClientsByAP[apMAC] ?? [],
+                            isRouter: false
+                        )
+                    }
+
+                    Spacer(minLength: 40)
+                }
+                .padding(20)
+            }
+        } else if let orbi, orbi.lastClientsByAP.isEmpty && orbi.lastRouterSummary.totalClients > 0 {
+            // Connected but client-by-AP data unavailable (single AP or no ConnAPMAC data)
+            VStack(spacing: 12) {
+                Image(systemName: "laptopcomputer.and.iphone")
+                    .font(.system(size: 36)).foregroundStyle(.secondary)
+                Text("\(orbi.lastRouterSummary.totalClients) devices connected")
+                    .font(.headline)
+                Text("Per-node breakdown requires multiple AP nodes.\nAll clients appear to be on the same node.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(40)
+        } else {
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Waiting for client data from Orbi…")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func clientsNodeSection(
+        apMAC: String, nodeName: String, nodeIcon: String,
+        clients: [OrbiClientEntry], isRouter: Bool
+    ) -> some View {
+        GroupBox {
+            if clients.isEmpty {
+                HStack(spacing: 8) {
+                    Image(systemName: "person.slash")
+                        .foregroundStyle(.secondary)
+                    Text("No clients on this node")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(6)
+            } else {
+                VStack(spacing: 0) {
+                    // Column header
+                    HStack(spacing: 0) {
+                        Text("").frame(width: 24)   // band icon
+                        Text("Device").frame(maxWidth: .infinity, alignment: .leading)
+                        Text("IP").frame(width: 110, alignment: .leading)
+                        Text("MAC").frame(width: 130, alignment: .leading)
+                        Text("Band").frame(width: 70, alignment: .trailing)
+                    }
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .padding(.horizontal, 8).padding(.bottom, 4)
+
+                    Divider()
+
+                    ForEach(clients) { client in
+                        OrbiClientRow(client: client)
+                        if client.id != clients.last?.id {
+                            Divider().padding(.horizontal, 8).opacity(0.5)
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: nodeIcon)
+                    .foregroundStyle(isRouter ? .blue : .purple)
+                Text(nodeName)
+                    .font(.subheadline.bold())
+                if !apMAC.isEmpty {
+                    Text(apMAC.lowercased())
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Text("\(clients.count) client\(clients.count == 1 ? "" : "s")")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -488,6 +614,52 @@ private struct OrbiEventRow: View {
         case .critical:  return .red
         case .unknown:   return .secondary
         }
+    }
+}
+
+// MARK: - Client Row
+
+private struct OrbiClientRow: View {
+    let client: OrbiClientEntry
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Image(systemName: client.bandIcon)
+                .font(.caption)
+                .foregroundStyle(bandColor)
+                .frame(width: 24)
+
+            Text(client.name)
+                .font(.callout)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text(client.ip.isEmpty ? "–" : client.ip)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 110, alignment: .leading)
+
+            Text(client.mac.isEmpty ? "–" : client.mac.lowercased())
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .frame(width: 130, alignment: .leading)
+
+            Text(client.bandLabel)
+                .font(.caption2)
+                .foregroundStyle(bandColor)
+                .frame(width: 70, alignment: .trailing)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+    }
+
+    private var bandColor: Color {
+        let lc = client.connectionType.lowercased()
+        if lc.contains("6")   { return .purple }
+        if lc.contains("5")   { return .blue }
+        if lc.contains("2.4") { return .green }
+        if lc.contains("eth") { return .orange }
+        return .secondary
     }
 }
 

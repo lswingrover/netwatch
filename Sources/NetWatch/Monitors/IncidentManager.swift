@@ -31,23 +31,45 @@ class IncidentManager: ObservableObject {
         let now = Date()
         guard now.timeIntervalSince(lastIncidentTime) >= cooldown else { return }
         lastIncidentTime = now
-        Task { await bundleIncident(reason: reason, subject: subject,
-                                    pingStates: pingStates, dnsStates: dnsStates,
-                                    traceroute: traceroute,
-                                    connectorSnapshots: connectorSnapshots) }
+        Task { _ = await bundleIncident(reason: reason, subject: subject,
+                                        pingStates: pingStates, dnsStates: dnsStates,
+                                        traceroute: traceroute,
+                                        connectorSnapshots: connectorSnapshots) }
+    }
+
+    /// Manually trigger a full incident report bundle, bypassing the cooldown.
+    /// Returns the bundle directory URL on success, or nil if bundle creation failed.
+    /// Intended for the "Generate Report" button in StackHealthView.
+    @discardableResult
+    func triggerManualReport(reason: String,
+                             note: String,
+                             pingStates: [PingState],
+                             dnsStates: [DNSState],
+                             traceroute: TracerouteResult?,
+                             connectorSnapshots: [ConnectorSnapshot] = []) async -> URL? {
+        let subject = note.isEmpty ? "Manual report — \(Self.timestamp())" : note
+        return await bundleIncident(
+            reason: "Manual Report: \(reason)",
+            subject: subject,
+            pingStates: pingStates,
+            dnsStates: dnsStates,
+            traceroute: traceroute,
+            connectorSnapshots: connectorSnapshots
+        )
     }
 
     // MARK: - Private
 
+    @discardableResult
     private func bundleIncident(reason: String, subject: String,
                                 pingStates: [PingState], dnsStates: [DNSState],
                                 traceroute: TracerouteResult?,
-                                connectorSnapshots: [ConnectorSnapshot] = []) async {
+                                connectorSnapshots: [ConnectorSnapshot] = []) async -> URL? {
         let ts = Self.timestamp()
         let dir = baseDir.appendingPathComponent("incidents/incident_\(ts)")
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        } catch { return }
+        } catch { return nil }
 
         // ── Run stack diagnosis ───────────────────────────────────────────────
         let diagnosis = StackDiagnosisEngine.diagnose(
@@ -183,6 +205,8 @@ class IncidentManager: ObservableObject {
                 )
             }
         }
+
+        return dir
     }
 
     private static func timestamp() -> String {

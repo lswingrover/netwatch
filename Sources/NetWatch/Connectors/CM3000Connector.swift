@@ -104,14 +104,17 @@ final class CM3000Connector: DeviceConnector {
             value: Double(usTotal), unit: ""))
 
         // ── Downstream SNR ────────────────────────────────────────────────────
+        // DOCSIS 3.0/3.1 spec minimum SNR: 30 dB (256-QAM). Recommended headroom: ≥33 dB.
+        // The modem's internal warning threshold (~38 dB) is more conservative than the spec
+        // and should NOT drive metric severity in NetWatch. We use spec-based thresholds here.
         if let avgSNR = json["avg_snr_db"] as? Double {
-            let sev: MetricSeverity = avgSNR >= 38 ? .ok : (avgSNR >= 33 ? .warning : .critical)
+            let sev: MetricSeverity = avgSNR >= 33 ? .ok : (avgSNR >= 30 ? .warning : .critical)
             metrics.append(ConnectorMetric(
                 key: "avg_snr_db", label: "Avg DS SNR",
                 value: avgSNR, unit: "dB", severity: sev))
         }
         if let minSNR = json["min_snr_db"] as? Double {
-            let sev: MetricSeverity = minSNR >= 38 ? .ok : (minSNR >= 33 ? .warning : .critical)
+            let sev: MetricSeverity = minSNR >= 33 ? .ok : (minSNR >= 30 ? .warning : .critical)
             metrics.append(ConnectorMetric(
                 key: "min_snr_db", label: "Min DS SNR",
                 value: minSNR, unit: "dB", severity: sev))
@@ -123,8 +126,10 @@ final class CM3000Connector: DeviceConnector {
         }
 
         // ── Downstream receive power ──────────────────────────────────────────
+        // DOCSIS 3.0 spec: −15 to +15 dBmV. Sweet spot: ±7 dBmV. NetWatch uses ±10 as
+        // .ok (comfortable headroom) so that readings near 7.x don't falsely trigger .warning.
         if let dsPwr = json["avg_ds_power_dbmv"] as? Double {
-            let sev: MetricSeverity = abs(dsPwr) <= 7 ? .ok : (abs(dsPwr) <= 15 ? .warning : .critical)
+            let sev: MetricSeverity = abs(dsPwr) <= 10 ? .ok : (abs(dsPwr) <= 15 ? .warning : .critical)
             metrics.append(ConnectorMetric(
                 key: "avg_ds_power", label: "DS Rx Power",
                 value: dsPwr, unit: "dBmV", severity: sev))
@@ -139,9 +144,14 @@ final class CM3000Connector: DeviceConnector {
         }
 
         // ── Codeword health (KEY early-warning metric) ────────────────────────
+        // Uncorrectable codeword counts are CUMULATIVE since last modem reboot — a large
+        // absolute count (e.g. 17,000) does not mean things are bad right now; it means
+        // impairment has occurred at some point since boot. NetWatch reports this as .info
+        // so it is visible without driving false .warning status. Rate-based assessment
+        // requires per-poll delta tracking (tracked in CM3000IntelligenceView).
         let totalUncorr = json["total_uncorr_codewords"] as? Int ?? 0
         let totalCorr   = json["total_corr_codewords"]   as? Int ?? 0
-        let uncorrSev: MetricSeverity = totalUncorr == 0 ? .ok : (totalUncorr < 100 ? .warning : .critical)
+        let uncorrSev: MetricSeverity = totalUncorr == 0 ? .ok : .info
         metrics.append(ConnectorMetric(
             key: "total_uncorr_codewords", label: "Uncorr Codewords",
             value: Double(totalUncorr), unit: "",
@@ -203,19 +213,41 @@ final class CM3000Connector: DeviceConnector {
         }
 
         // Modem diagnostic messages and error events
+        // The CM3000 emits DOCSIS event log messages using its OWN conservative thresholds
+        // (e.g. "SNR is poor at 43 dB" when DOCSIS spec minimum is 30 dB). NetWatch
+        // overrides these with DOCSIS-spec-based severity so they don't produce misleading
+        // .warning dots when signal is actually fine per spec.
         if let errorEvents = json["error_events"] as? [[String: Any]], !errorEvents.isEmpty {
             for ev in errorEvents.prefix(8) {
                 let evType = ev["type"] as? String ?? "modem_error"
                 let text   = ev["message"] as? String
                            ?? ev.values.compactMap { $0 as? String }.joined(separator: " ")
-                let isCritical = text.lowercased().contains("t4")
-                             || text.lowercased().contains("lost sync")
-                             || evType == "partial_service"
                 guard !text.isEmpty else { continue }
+
+                let lc = text.lowercased()
+                // True critical events — timing failures, sync loss, ranging abort
+                let isCritical = lc.contains("t4 timeout")
+                             || lc.contains("t3 timeout")
+                             || lc.contains("lost sync")
+                             || lc.contains("ranging aborted")
+                             || lc.contains("registration failed")
+                             || evType == "partial_service"
+
+                // Modem's internal SNR/power warnings use conservative thresholds that
+                // do not align with the DOCSIS spec. Reclassify to .info.
+                let isModemThresholdWarning = !isCritical && (
+                    (lc.contains("snr") && (lc.contains("poor") || lc.contains("low") || lc.contains("warn")))
+                    || lc.contains("rx power") && lc.contains("out of range")
+                    || lc.contains("tx power") && lc.contains("warn")
+                )
+
+                let sev: MetricSeverity = isCritical ? .critical
+                    : (isModemThresholdWarning ? .info : .warning)
+
                 events.append(ConnectorEvent(
                     timestamp: Date(), type: evType,
                     description: text,
-                    severity: isCritical ? .critical : .warning))
+                    severity: sev))
             }
         }
 

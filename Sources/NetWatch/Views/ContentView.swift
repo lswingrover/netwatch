@@ -8,6 +8,7 @@ enum NavItem: String, CaseIterable, Identifiable {
     case traceroute = "Traceroute"
     case devices    = "Devices"
     case topology   = "Topology"
+    case openPorts  = "Open Ports"
     case speedTest  = "Speed Test"
     case incidents  = "Incidents"
 
@@ -22,6 +23,7 @@ enum NavItem: String, CaseIterable, Identifiable {
         case .traceroute: "point.3.connected.trianglepath.dotted"
         case .devices:    "cable.connector.horizontal"
         case .topology:   "point.3.filled.connected.trianglepath.dotted"
+        case .openPorts:  "lock.open.display"
         case .speedTest:  "speedometer"
         case .incidents:  "exclamationmark.triangle"
         }
@@ -65,6 +67,7 @@ struct ContentView: View {
                         selection = .devices
                         pendingConnectorID = nodeId
                     }
+                case .openPorts:  OpenPortsView()
                 case .speedTest:  SpeedTestView()
                 case .incidents:  IncidentsView()
                 }
