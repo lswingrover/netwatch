@@ -115,6 +115,12 @@ struct OrbiIntelligenceView: View {
                 if let orbi {
                     routerSummaryTiles(orbi.lastRouterSummary)
                     satelliteSection(orbi)
+                    meshInterpretation(orbi)
+                    meshGuidance(orbi)
+                    ClaudeCompanionCard(
+                        context: orbiClaudeContext(orbi),
+                        promptHint: orbiClaudeHint(orbi)
+                    )
                 } else {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -448,6 +454,269 @@ struct OrbiIntelligenceView: View {
         }
     }
 
+    // MARK: - Mesh Interpretation (always shown on Overview)
+
+    @ViewBuilder
+    private func meshInterpretation(_ orbi: OrbiConnector) -> some View {
+        let s           = orbi.lastRouterSummary
+        let satellites  = orbi.lastSatellites
+        let totalSats   = satellites.count
+        let clientsByAP = orbi.lastClientsByAP
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Mesh Interpretation")
+                .font(.headline)
+
+            // WAN card
+            OrbiContextCard(
+                color: s.wanConnected ? .green : .red,
+                headline: s.wanConnected
+                    ? "WAN Connected — \(s.wanIP.isEmpty ? "IP resolving…" : s.wanIP)"
+                    : "WAN Offline",
+                detail: s.wanConnected
+                    ? "Your Orbi router has a live internet connection. The WAN IP shown is the address assigned by your cable modem. If this IP matches your CM3000's WAN IP, NAT is working correctly end-to-end."
+                    : "The Orbi is reporting no WAN connectivity. Verify the ethernet cable between your CM3000 modem and the Orbi WAN port. Check the CM3000 connector — if the modem has a healthy DOCSIS lock, the problem is between the modem and Orbi."
+            )
+
+            // Satellite backhaul interpretation
+            if !satellites.isEmpty {
+                let wiredSats    = satellites.filter { $0.backhaulBand == "eth" || $0.backhaulBand == "wired" }
+                let band6Sats    = satellites.filter { $0.backhaulBand == "6" }
+                let band5Sats    = satellites.filter { $0.backhaulBand == "5" }
+                let band24Sats   = satellites.filter { $0.backhaulBand == "2.4" || $0.backhaulBand == "2" }
+
+                if !wiredSats.isEmpty {
+                    OrbiContextCard(
+                        color: .green,
+                        headline: "\(wiredSats.count == totalSats ? "All" : "\(wiredSats.count)") Satellite\(wiredSats.count == 1 ? "" : "s") on Wired Backhaul — Ideal",
+                        detail: "Ethernet backhaul eliminates wireless overhead between router and satellite entirely. Clients connected to these satellites get near-router performance regardless of physical distance or walls. This is the best possible Orbi configuration."
+                    )
+                }
+                if !band6Sats.isEmpty {
+                    OrbiContextCard(
+                        color: .purple,
+                        headline: "\(band6Sats.count) Satellite\(band6Sats.count == 1 ? "" : "s") on 6 GHz Backhaul — Excellent",
+                        detail: "The 6 GHz tri-band backhaul is a dedicated wireless link between router and satellite — client traffic doesn't share this channel. Performance is near-wired. This is the best wireless backhaul option on Orbi 960 and 960-series hardware."
+                    )
+                }
+                if !band5Sats.isEmpty {
+                    OrbiContextCard(
+                        color: .blue,
+                        headline: "\(band5Sats.count) Satellite\(band5Sats.count == 1 ? "" : "s") on 5 GHz Backhaul — Good",
+                        detail: "5 GHz backhaul is a dedicated wireless channel on tri-band Orbi models. Performance is good but may be affected by interference or distance. On dual-band models, 5 GHz is shared between backhaul and clients — throughput degrades as client count on that satellite increases. Watch for elevated latency when many clients are connected."
+                    )
+                }
+                if !band24Sats.isEmpty {
+                    OrbiContextCard(
+                        color: .orange,
+                        headline: "\(band24Sats.count) Satellite\(band24Sats.count == 1 ? "" : "s") on 2.4 GHz Backhaul — Suboptimal",
+                        detail: "2.4 GHz backhaul is significantly slower and more latency-prone than 5 GHz or 6 GHz. Maximum throughput is ~300 Mbps theoretical (real-world typically 50–150 Mbps) with high contention on crowded channels. Devices connected to this satellite will experience higher latency. See the Guidance section for steps to improve backhaul quality."
+                    )
+                }
+            }
+
+            // Client distribution
+            if !clientsByAP.isEmpty {
+                let totalClients = clientsByAP.values.reduce(0) { $0 + $1.count }
+                let routerClients = clientsByAP[orbi.routerAPMAC]?.count ?? 0
+                let routerPct = totalClients > 0 ? Int(Double(routerClients) / Double(totalClients) * 100) : 0
+
+                let (distColor, distHeadline, distDetail): (Color, String, String) = {
+                    if totalClients == 0 { return (.secondary, "No Client Data", "Client distribution data will appear once devices connect and poll data is available.") }
+                    if totalSats == 0    { return (.blue, "\(totalClients) Clients on Router", "All devices are connecting through the Orbi router. Add satellites if coverage is needed in distant rooms.") }
+                    if routerPct > 70    { return (.yellow, "\(routerPct)% of Clients on Router Node", "\(routerClients) of \(totalClients) clients are on the router, leaving satellites underutilized. Devices far from the router may be connecting to it via weak 2.4 GHz signal instead of roaming to a closer satellite. This is a common \"sticky client\" problem — some devices won't roam until signal drops very low.") }
+                    return (.green, "Clients Well-Distributed Across \(clientsByAP.count) Node\(clientsByAP.count == 1 ? "" : "s")", "Client load is spread across your mesh nodes. This maximises per-client throughput by avoiding congestion on any single AP.")
+                }()
+                OrbiContextCard(color: distColor, headline: distHeadline, detail: distDetail)
+            }
+
+            // CPU/Memory
+            if let cpu = s.cpuPct {
+                let (cpuColor, cpuHead, cpuDetail): (Color, String, String) = {
+                    if cpu > 90 { return (.red, "CPU \(Int(cpu))% — Critical Load", "Router CPU is critically overloaded. This will cause latency spikes, packet drops, and may trigger connection resets. Common causes: high-rate NAT with many simultaneous connections, DPI/traffic analysis enabled, or a firmware bug. Reboot the router; if CPU stays high, disable bandwidth monitoring in the Orbi app.") }
+                    if cpu > 70 { return (.yellow, "CPU \(Int(cpu))% — Elevated Load", "Router CPU is running hot. This is manageable for brief periods but sustained high CPU degrades routing performance. If it persists, reduce the number of active monitoring features or limit connected devices.") }
+                    return (.green, "CPU \(Int(cpu))% — Normal", "Router CPU load is healthy. Plenty of headroom for current traffic levels and NAT workload.")
+                }()
+                OrbiContextCard(color: cpuColor, headline: cpuHead, detail: cpuDetail)
+            }
+
+            // Guest network
+            if s.guestEnabled {
+                OrbiContextCard(
+                    color: .orange,
+                    headline: "Guest Network Active",
+                    detail: "The Orbi guest SSID is broadcasting. Guest clients are isolated from your primary LAN by default — they can reach the internet but cannot access your NAS, printers, or other local devices. Verify the guest network is intentionally active; leaving it on with a weak password is an attack surface."
+                )
+            }
+
+            // Firmware update
+            if !s.firmwareUpdate.isEmpty {
+                OrbiContextCard(
+                    color: .orange,
+                    headline: "Firmware Update Available — \(s.firmwareUpdate)",
+                    detail: "A new firmware version is available for your Orbi router. Netgear firmware updates typically include security patches, Wi-Fi stability fixes, and performance improvements. Update during a low-traffic period (the router will reboot). See the Guidance section for update steps."
+                )
+            }
+        }
+    }
+
+    // MARK: - Mesh Guidance (shown when actionable issues present)
+
+    @ViewBuilder
+    private func meshGuidance(_ orbi: OrbiConnector) -> some View {
+        let s           = orbi.lastRouterSummary
+        let satellites  = orbi.lastSatellites
+        let offlineSats = satellites.filter { !$0.isOnline }
+        let band24Sats  = satellites.filter { $0.backhaulBand == "2.4" || $0.backhaulBand == "2" }
+        let hasFirmware = !s.firmwareUpdate.isEmpty
+        let cpuHigh     = (s.cpuPct ?? 0) > 70
+        let hasIssue    = !offlineSats.isEmpty || !band24Sats.isEmpty || hasFirmware || cpuHigh || !s.wanConnected
+
+        if hasIssue {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Guidance")
+                    .font(.headline)
+
+                if !s.wanConnected {
+                    OrbiGuidanceCard(
+                        icon: "network.slash",
+                        color: .red,
+                        title: "Restore WAN Connectivity",
+                        steps: [
+                            "Check the CM3000 modem's DS/US indicator LEDs — if blinking, the modem hasn't locked a DOCSIS channel and the issue is upstream.",
+                            "Reseat the ethernet cable between modem and Orbi WAN port (usually the yellow port).",
+                            "Power cycle in order: modem off → 2 min → on → wait for DOCSIS sync → power cycle Orbi.",
+                            "If modem is synced but Orbi still shows no WAN, check whether the Orbi WAN port is set to DHCP (auto). A static IP mismatch will prevent connection.",
+                            "If using PPPOE (some ISPs): verify your PPPOE credentials in Orbi admin → Advanced → Setup → Internet Setup."
+                        ]
+                    )
+                }
+
+                if !offlineSats.isEmpty {
+                    OrbiGuidanceCard(
+                        icon: "wifi.slash",
+                        color: .red,
+                        title: "\(offlineSats.count) Satellite\(offlineSats.count == 1 ? "" : "s") Offline",
+                        steps: [
+                            "Locate the offline satellite (\(offlineSats.map(\.name).joined(separator: ", "))) and check its power LED.",
+                            "If the LED is white (syncing) or magenta/amber (error), power cycle: unplug → wait 30s → replug.",
+                            "Move the satellite closer to the router temporarily to rule out range issues. If it syncs when close, it needs a relay node or to be relocated.",
+                            "Ethernet backhaul: if the satellite connects via ethernet, check the cable and the switch/port it connects to.",
+                            "If the satellite shows in the Orbi app as 'Disconnected' even when close to the router, do a factory reset on the satellite (pin hole reset) and re-add it."
+                        ]
+                    )
+                }
+
+                if !band24Sats.isEmpty {
+                    OrbiGuidanceCard(
+                        icon: "wifi.exclamationmark",
+                        color: .orange,
+                        title: "\(band24Sats.map(\.name).joined(separator: ", ")) — Poor Wireless Backhaul",
+                        steps: [
+                            "Move the satellite closer to the router. The 5 GHz backhaul band has shorter range than 2.4 GHz — getting the satellite within ~30 feet / one wall of the router is ideal.",
+                            "Avoid placing satellites in closets, behind appliances, or near microwaves and cordless phones (2.4 GHz interference sources).",
+                            "If the satellite is too far from the router to get 5 GHz backhaul, consider: (a) adding an intermediate satellite as a relay, or (b) running ethernet backhaul to the satellite location.",
+                            "After moving, trigger a manual poll and check the backhaul band in the Clients tab — it should upgrade to 5 GHz or 6 GHz."
+                        ]
+                    )
+                }
+
+                if hasFirmware {
+                    OrbiGuidanceCard(
+                        icon: "arrow.down.circle.fill",
+                        color: .orange,
+                        title: "Firmware Update Available — \(s.firmwareUpdate)",
+                        steps: [
+                            "Open the Orbi admin panel (orbilogin.com or \(s.wanIP.isEmpty ? "your Orbi IP" : s.wanIP.components(separatedBy: ".").prefix(3).joined(separator: ".") + ".1")) → Advanced → Administration → Firmware Update.",
+                            "Select 'Check' to confirm the update is available, then 'Update'.",
+                            "Alternatively, use the Orbi mobile app → tap the router → Settings → Firmware.",
+                            "The router will reboot after update (typically ~3 minutes). All connected devices will lose internet briefly."
+                        ]
+                    )
+                }
+
+                if cpuHigh {
+                    OrbiGuidanceCard(
+                        icon: "cpu",
+                        color: .red,
+                        title: "Router CPU High — Reduce Processing Load",
+                        steps: [
+                            "In the Orbi admin panel, disable traffic analysis / bandwidth monitoring if enabled — this is the most common cause of high CPU on consumer routers.",
+                            "Disable QoS (Quality of Service) if you don't actively use it. QoS requires per-packet classification which is CPU-intensive.",
+                            "Reduce the number of active VPN tunnels if any are idle.",
+                            "Check if a firmware update is available — some CPU bugs are fixed in newer firmware.",
+                            "If CPU stays above 90% after these steps, a reboot often clears a stuck process."
+                        ]
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - Claude companion context
+
+    private func orbiClaudeContext(_ orbi: OrbiConnector) -> String {
+        let s           = orbi.lastRouterSummary
+        let satellites  = orbi.lastSatellites
+        let totalClients = orbi.lastClientsByAP.values.reduce(0) { $0 + $1.count }
+        let routerClients = orbi.lastClientsByAP[orbi.routerAPMAC]?.count ?? 0
+
+        var lines = [
+            "## Netgear Orbi Mesh Network",
+            "WAN: \(s.wanConnected ? "CONNECTED (\(s.wanIP))" : "OFFLINE")",
+            "Firmware: \(s.firmware.isEmpty ? "unknown" : s.firmware)\(s.firmwareUpdate.isEmpty ? "" : " → UPDATE \(s.firmwareUpdate) available")",
+            "Total Clients: \(s.totalClients) (\(routerClients) on router\(satellites.isEmpty ? "" : ", \(totalClients - routerClients) on satellites"))",
+            "Today Traffic: RX \(s.todayRXmb.map { String(format: "%.0f MB", $0) } ?? "–"), TX \(s.todayTXmb.map { String(format: "%.0f MB", $0) } ?? "–")",
+            s.cpuPct != nil ? "CPU: \(String(format: "%.0f", s.cpuPct!))%" : "",
+            s.memPct != nil ? "Memory: \(String(format: "%.0f", s.memPct!))%" : "",
+            "Guest Network: \(s.guestEnabled ? "ACTIVE" : "Off")"
+        ].filter { !$0.isEmpty }
+
+        if !satellites.isEmpty {
+            lines.append("")
+            lines.append("Satellite Nodes (\(satellites.count)):")
+            for sat in satellites {
+                let clients = orbi.lastClientsByAP[sat.mac]?.count ?? 0
+                lines.append("  \(sat.name): \(sat.isOnline ? "ONLINE" : "OFFLINE"), backhaul=\(sat.backhaulBand.isEmpty ? "unknown" : sat.backhaulBand)GHz, \(clients) clients")
+            }
+        }
+
+        if let snap = snapshot, !snap.events.isEmpty {
+            lines.append("")
+            lines.append("Recent Events:")
+            for ev in snap.events.prefix(5) {
+                lines.append("  [\(ev.type)] \(ev.description)")
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func orbiClaudeHint(_ orbi: OrbiConnector) -> String {
+        let satellites = orbi.lastSatellites
+        let offlineSats = satellites.filter { !$0.isOnline }
+        if !offlineSats.isEmpty {
+            return "One of my Orbi satellite nodes is offline. What should I check to get it reconnected?"
+        }
+        let band24Sats = satellites.filter { $0.backhaulBand == "2.4" || $0.backhaulBand == "2" }
+        if !band24Sats.isEmpty {
+            return "My Orbi satellite is using 2.4 GHz backhaul. How can I improve this?"
+        }
+        let s = orbi.lastRouterSummary
+        if !s.firmwareUpdate.isEmpty {
+            return "Should I update my Orbi firmware to \(s.firmwareUpdate) and when is the best time to do it?"
+        }
+        let totalClients = orbi.lastClientsByAP.values.reduce(0) { $0 + $1.count }
+        let routerClients = orbi.lastClientsByAP[orbi.routerAPMAC]?.count ?? 0
+        if totalClients > 0 && !satellites.isEmpty {
+            let routerPct = Int(Double(routerClients) / Double(totalClients) * 100)
+            if routerPct > 70 {
+                return "\(routerPct)% of my devices are on the router node. Are my satellites being underutilised?"
+            }
+        }
+        return "How is my Orbi mesh network performing and are there any improvements I should make?"
+    }
+
     // MARK: - Unavailable
 
     private var unavailableView: some View {
@@ -460,6 +729,70 @@ struct OrbiIntelligenceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(40)
+    }
+}
+
+// MARK: - Orbi Context Card (interpretation callout)
+
+private struct OrbiContextCard: View {
+    let color:    Color
+    let headline: String
+    let detail:   String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Rectangle()
+                .fill(color)
+                .frame(width: 3)
+                .cornerRadius(2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(headline)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(color.opacity(0.06)))
+    }
+}
+
+// MARK: - Orbi Guidance Card (actionable steps)
+
+private struct OrbiGuidanceCard: View {
+    let icon:  String
+    let color: Color
+    let title: String
+    let steps: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).foregroundStyle(color)
+                Text(title).font(.subheadline).fontWeight(.semibold).foregroundStyle(color)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("\(i + 1).")
+                            .font(.caption).fontWeight(.medium).foregroundStyle(.secondary)
+                            .frame(width: 18, alignment: .trailing)
+                        Text(step)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(color.opacity(0.07))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(color.opacity(0.2), lineWidth: 1))
+        )
     }
 }
 

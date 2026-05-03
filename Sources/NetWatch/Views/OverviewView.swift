@@ -128,10 +128,73 @@ struct OverviewView: View {
                     DNSSummaryTable()
                 }
 
+                // Claude companion
+                ClaudeCompanionCard(
+                    context: overviewClaudeContext(),
+                    promptHint: overviewClaudeHint()
+                )
+
                 Spacer()
             }
             .padding(20)
         }
+    }
+
+    private func overviewClaudeContext() -> String {
+        var lines = [
+            "## NetWatch — This Mac's Network State",
+            "Interface: \(ifm.interface.isEmpty ? "unknown" : ifm.interface)",
+            "Local IP: \(ifm.ipAddress.isEmpty ? "–" : ifm.ipAddress)",
+            "Public IP: \(ifm.publicIP.isEmpty ? "resolving…" : ifm.publicIP)",
+            "Gateway: \(ifm.gateway.isEmpty ? "–" : ifm.gateway) (RTT: \(ifm.gatewayRTT.rttString))",
+            "Download: \(ifm.currentRate.rxBytesPerSec.humanBytes)/s  Upload: \(ifm.currentRate.txBytesPerSec.humanBytes)/s",
+            "TCP Sessions: \(ifm.tcpEstablished)",
+            "RX Errors: \(ifm.currentRate.rxErrors)  TX Errors: \(ifm.currentRate.txErrors)",
+            "Link Flaps (session): \(ifm.linkFlaps.count)",
+            "Overall Network Status: \(monitor.overallStatus.label)"
+        ]
+        if !ifm.wifiSSID.isEmpty {
+            lines.append("Wi-Fi SSID: \(ifm.wifiSSID)")
+            lines.append("Wi-Fi RSSI: \(ifm.wifiRSSI) dBm  Noise: \(ifm.wifiNoise) dBm  SNR: \(ifm.wifiSNR) dB")
+            lines.append("Wi-Fi Tx Rate: \(ifm.wifiTxRate) Mbps  MCS: \(ifm.wifiMCS)  Retry Rate: \(String(format: "%.1f%%", ifm.wifiRetryRate * 100))")
+        }
+        // Ping summary
+        let failedPings = monitor.pingStates.filter { !$0.isOnline }
+        if !monitor.pingStates.isEmpty {
+            lines.append("")
+            lines.append("Ping Targets (\(monitor.pingStates.count) total, \(failedPings.count) failing):")
+            for ps in monitor.pingStates.prefix(6) {
+                let rtt = ps.lastRTT.map { String(format: "%.1f ms", $0) } ?? "FAIL"
+                lines.append("  \(ps.target.displayName): \(rtt) (success rate \(Int(ps.successRate * 100))%)")
+            }
+        }
+        // DNS summary
+        let failedDNS = monitor.dnsStates.filter { $0.successRate < 0.9 }
+        if !failedDNS.isEmpty {
+            lines.append("")
+            lines.append("Degraded DNS Targets:")
+            for ds in failedDNS {
+                lines.append("  \(ds.target.domain): \(Int(ds.successRate * 100))% success")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func overviewClaudeHint() -> String {
+        let failedPings = monitor.pingStates.filter { !$0.isOnline }
+        if failedPings.count > 1 {
+            return "Multiple ping targets are failing (\(failedPings.map { $0.target.host }.joined(separator: ", "))). Is this a local or upstream issue?"
+        }
+        if !ifm.wifiSSID.isEmpty && ifm.wifiRSSI < -75 {
+            return "My Wi-Fi RSSI is \(ifm.wifiRSSI) dBm which seems low. What are the implications and should I move closer to my router?"
+        }
+        if ifm.gatewayRTT ?? 0 > 20 {
+            return "My gateway RTT is \(ifm.gatewayRTT.rttString). Is that too high for a local LAN hop, and what might cause it?"
+        }
+        if ifm.linkFlaps.count > 0 {
+            return "I've had \(ifm.linkFlaps.count) link flap\(ifm.linkFlaps.count == 1 ? "" : "s") this session. Is that normal and what causes interface flapping?"
+        }
+        return "Here's a snapshot of my Mac's current network state. Is everything healthy, and are there any issues I should investigate?"
     }
 
     func rttColor(_ rtt: Double?) -> Color {

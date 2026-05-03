@@ -200,6 +200,12 @@ struct FirewallaIntelligenceView: View {
                     networkStatusTiles(snap)
                     securitySummary(snap)
                     activitySummary(snap)
+                    securityInterpretation(snap)
+                    firewallGuidance(snap)
+                    ClaudeCompanionCard(
+                        context: firewallClaudeContext(snap),
+                        promptHint: firewallClaudeHint(snap)
+                    )
                     Spacer(minLength: 40)
                 }
                 .padding(20)
@@ -214,8 +220,6 @@ struct FirewallaIntelligenceView: View {
     }
 
     private func networkStatusTiles(_ snap: ConnectorSnapshot) -> some View {
-        let fw = firewalla
-
         // Pull key metrics from snapshot
         let wanMetric   = snap.metrics.first(where: { $0.key.hasPrefix("wan_") && !$0.key.contains("ip") })
         let pubIP       = snap.metrics.first(where: { $0.key == "public_ip" })?.unit ?? "–"
@@ -224,10 +228,8 @@ struct FirewallaIntelligenceView: View {
         let pausedDev   = Int(snap.metrics.first(where: { $0.key == "paused_devices" })?.value ?? 0)
         let alarmCount  = Int(snap.metrics.first(where: { $0.key == "active_alarms" })?.value ?? 0)
         let vpnTunnels  = Int(snap.metrics.first(where: { $0.key == "vpn_tunnels" })?.value ?? 0)
-        let uptimeH     = snap.metrics.first(where: { $0.key == "uptime_h" })?.value
-        let topBWName   = snap.metrics.first(where: { $0.key == "top_bw_name" })?.unit ?? "–"
-        let topBWMB     = snap.metrics.first(where: { $0.key == "top_bw_device" })?.value
-        let topDomain   = snap.metrics.first(where: { $0.key == "unique_domains" })?.unit ?? "–"
+        let uptimeH      = snap.metrics.first(where: { $0.key == "uptime_h" })?.value
+        let topDomain    = snap.metrics.first(where: { $0.key == "unique_domains" })?.unit ?? "–"
         let blockedTotal = Int(snap.metrics.first(where: { $0.key == "total_blocked" })?.value ?? 0)
 
         let wanActive = wanMetric?.severity == .ok
@@ -418,6 +420,255 @@ struct FirewallaIntelligenceView: View {
             .background(RoundedRectangle(cornerRadius: 10)
                 .fill(Color(NSColor.controlBackgroundColor)))
         }
+    }
+
+    // MARK: - Security Interpretation (always shown on Overview)
+
+    @ViewBuilder
+    private func securityInterpretation(_ snap: ConnectorSnapshot) -> some View {
+        let blockedTotal = Int(snap.metrics.first(where: { $0.key == "total_blocked" })?.value ?? 0)
+        let alarmCount   = Int(snap.metrics.first(where: { $0.key == "active_alarms" })?.value  ?? 0)
+        let onlineDev    = Int(snap.metrics.first(where: { $0.key == "online_devices" })?.value ?? 0)
+        let uptimeH      = snap.metrics.first(where: { $0.key == "uptime_h" })?.value
+        let vpnTunnels   = Int(snap.metrics.first(where: { $0.key == "vpn_tunnels" })?.value ?? 0)
+        let wanActive    = snap.metrics.first(where: { $0.key.hasPrefix("wan_") && !$0.key.contains("ip") })?.severity == .ok
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Security Interpretation")
+                .font(.headline)
+
+            // WAN status card
+            let uptimeStr: String = {
+                guard let h = uptimeH else { return "uptime unknown" }
+                if h >= 24 { return String(format: "%.0f days uptime", h / 24) }
+                return String(format: "%.0f hours uptime", h)
+            }()
+            FWContextCard(
+                color: wanActive ? .green : .red,
+                headline: wanActive
+                    ? "WAN Connected — \(uptimeStr)"
+                    : "WAN Offline or Unavailable",
+                detail: wanActive
+                    ? "Your Firewalla's internet connection is active and healthy. The \(uptimeStr) figure reflects the Firewalla device uptime, not the WAN connection age specifically."
+                    : "Firewalla is reporting no WAN connectivity. Check the coax/fiber line between your modem and router. If the CM3000 modem shows a healthy DOCSIS lock, the issue is between the modem and Firewalla WAN port."
+            )
+
+            // Alarm classification card
+            let cyberAlarms = snap.events.filter { $0.type == "alarm" && $0.severity == .critical }
+            let warnAlarms  = snap.events.filter { $0.type == "alarm" && $0.severity == .warning }
+            let infoAlarms  = snap.events.filter { $0.type == "alarm" && $0.severity == .info }
+
+            if alarmCount == 0 && cyberAlarms.isEmpty && warnAlarms.isEmpty {
+                FWContextCard(
+                    color: .green,
+                    headline: "No Active Security Alarms",
+                    detail: "Firewalla's threat detection engine is running and has not flagged any suspicious activity. This covers port scans, malware callbacks, abnormal data transfers, and geo-blocked connections. A clean alarm state is the normal operating condition for a well-configured home network."
+                )
+            } else if !cyberAlarms.isEmpty {
+                FWContextCard(
+                    color: .red,
+                    headline: "\(cyberAlarms.count) Critical Alarm\(cyberAlarms.count == 1 ? "" : "s") — Requires Attention",
+                    detail: "Critical alarms indicate activity Firewalla has high confidence is malicious or policy-violating: malware callbacks, port scans originating from inside your network, or active intrusion attempts. These are not false positives — they should be investigated promptly. See the Alarms tab for details and the Guidance section below for next steps."
+                )
+            } else if !warnAlarms.isEmpty {
+                FWContextCard(
+                    color: .orange,
+                    headline: "\(warnAlarms.count) Warning Alarm\(warnAlarms.count == 1 ? "" : "s") — Review Recommended",
+                    detail: "Warning alarms are Firewalla's medium-confidence flags: unusual outbound connections, new device activity, or geo-destination anomalies. Many are benign (new streaming service, VPN traffic, app update servers). Review the Alarms tab — most can be acknowledged or suppressed once you understand the source."
+                )
+            }
+            if !infoAlarms.isEmpty {
+                FWContextCard(
+                    color: .blue,
+                    headline: "\(infoAlarms.count) Informational Alarm\(infoAlarms.count == 1 ? "" : "s") — Low Priority",
+                    detail: "Informational alarms are FYI-only: new device joined, geo-detection, or ad/tracker categories. They don't require action but are useful for auditing what's on your network. View them in the Alarms tab."
+                )
+            }
+
+            // Blocked requests context
+            if blockedTotal > 0 {
+                let blockContext: (Color, String, String) = {
+                    switch blockedTotal {
+                    case ..<50:
+                        return (.green,
+                                "\(blockedTotal) Blocked Requests — Minimal Filtering Activity",
+                                "A low block count typically means your network has few IoT devices or aggressive trackers. Firewalla is actively filtering but finding little to block. This is normal for a network with ad-blocking disabled or with devices that use HTTPS for everything.")
+                    case 50..<500:
+                        return (.blue,
+                                "\(blockedTotal) Blocked Requests — Normal Filtering Activity",
+                                "A moderate block count is typical for a home network with Firewalla's default rules active. This covers ad networks, tracking pixels, telemetry endpoints, and category-filtered domains. The Domains tab shows what's being blocked most frequently.")
+                    case 500..<5000:
+                        return (.yellow,
+                                "\(blockedTotal >= 1000 ? String(format: "%.1fK", Double(blockedTotal)/1000) : "\(blockedTotal)") Blocked Requests — High Filtering Activity",
+                                "A high block count suggests aggressive category filtering is active, a device is making many blocked requests (e.g. a smart TV hitting ad networks), or a rule is blocking legitimate traffic. Check the Domains tab for the top blocked domains and verify none are false positives causing app or service issues.")
+                    default:
+                        return (.orange,
+                                "\(String(format: "%.1fK", Double(blockedTotal)/1000)) Blocked Requests — Very High — Investigate",
+                                "An unusually high block count may indicate: (1) a device is being blocked on its primary communication channel causing retry loops, (2) a misconfigured rule blocking a CDN or update server, or (3) a device with aggressive ad-loading behavior. Open the Domains tab and sort by count to find the culprit domain.")
+                    }
+                }()
+                FWContextCard(color: blockContext.0, headline: blockContext.1, detail: blockContext.2)
+            }
+
+            // VPN context
+            if vpnTunnels > 0 {
+                FWContextCard(
+                    color: .green,
+                    headline: "\(vpnTunnels) Active VPN Tunnel\(vpnTunnels == 1 ? "" : "s") — Remote Access Live",
+                    detail: "WireGuard peers are actively connected to your Firewalla VPN server. Traffic from these peers traverses your home network under the same Firewalla rules as local devices. Check the VPN tab to see which peers are connected and their data transfer totals."
+                )
+            }
+
+            // Devices context
+            if onlineDev > 0 {
+                let density: (Color, String) = {
+                    switch onlineDev {
+                    case ..<10:  return (.green, "Light network — \(onlineDev) online devices. Easy to monitor and identify any rogue device.")
+                    case 10..<25: return (.blue, "\(onlineDev) online devices — typical busy home network. Use the Devices tab to identify any unfamiliar MAC addresses.")
+                    default:     return (.yellow, "\(onlineDev) online devices — dense network. The Devices tab sorts by bandwidth; any device consuming disproportionate data warrants a look.")
+                    }
+                }()
+                FWContextCard(color: density.0, headline: "Device Density", detail: density.1)
+            }
+        }
+    }
+
+    // MARK: - Firewall Guidance (shown when actionable issues present)
+
+    @ViewBuilder
+    private func firewallGuidance(_ snap: ConnectorSnapshot) -> some View {
+        let cyberAlarms  = snap.events.filter { $0.type == "alarm" && $0.severity == .critical }
+        let pausedDev    = Int(snap.metrics.first(where: { $0.key == "paused_devices" })?.value ?? 0)
+        let blockedTotal = Int(snap.metrics.first(where: { $0.key == "total_blocked" })?.value ?? 0)
+        let wanActive    = snap.metrics.first(where: { $0.key.hasPrefix("wan_") && !$0.key.contains("ip") })?.severity == .ok
+        let hasIssue     = !cyberAlarms.isEmpty || pausedDev > 0 || !wanActive || blockedTotal > 5000
+
+        if hasIssue {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Guidance")
+                    .font(.headline)
+
+                if !wanActive {
+                    FWGuidanceCard(
+                        icon: "network.slash",
+                        color: .red,
+                        title: "WAN Offline — Restore Internet Connectivity",
+                        steps: [
+                            "Check the CM3000 modem: if its DS/US indicator is blinking, the modem hasn't locked a DOCSIS channel. The issue is upstream of the Firewalla.",
+                            "Verify the ethernet cable between modem and Firewalla WAN port. Reseat both ends.",
+                            "Power cycle in order: modem off → wait 2 minutes → power on → wait for sync → power cycle Firewalla.",
+                            "If the modem is online (solid DS/US lights) but Firewalla still shows no WAN, check Firewalla WAN settings (static vs. DHCP). The modem may not be releasing a DHCP lease after switching devices.",
+                            "Contact Comcast if modem cannot acquire a DOCSIS lock (check CM3000 Events tab for T4 timeouts)."
+                        ]
+                    )
+                }
+
+                if !cyberAlarms.isEmpty {
+                    FWGuidanceCard(
+                        icon: "exclamationmark.shield.fill",
+                        color: .red,
+                        title: "Critical Security Alarm — Investigate Immediately",
+                        steps: [
+                            "Open the Alarms tab and read the alarm description carefully. Note the source device (IP and MAC) and the destination.",
+                            "Identify the device: go to the Devices tab, find the MAC address, and confirm what device it is.",
+                            "If the device is unknown or shouldn't be communicating externally, pause it immediately using the Pause button in the Devices tab.",
+                            "For malware callback alarms: isolate the device (pause it), then run a malware scan (Windows: Malwarebytes; Mac: Malwarebytes or CleanMyMac; iOS/Android: factory reset is safest).",
+                            "For port scan alarms: check whether it's originating from inside your network (compromised device) or is an inbound scan from the internet (less urgent — Firewalla blocks inbound by default).",
+                            "After resolving, acknowledge the alarm in the Firewalla app to reset the alert state."
+                        ]
+                    )
+                }
+
+                if pausedDev > 0 {
+                    FWGuidanceCard(
+                        icon: "pause.circle.fill",
+                        color: .orange,
+                        title: "\(pausedDev) Device\(pausedDev == 1 ? "" : "s") Paused — Review Intentional Blocks",
+                        steps: [
+                            "Open the Devices tab and filter by Paused to see which devices have internet access blocked.",
+                            "Verify each paused device is intentionally blocked (e.g. a child's device on schedule, a quarantined IoT device).",
+                            "If a paused device is causing unexpected issues — a printer that can't update firmware, a hub that's lost cloud connectivity — consider unpausing and setting a traffic rule instead.",
+                            "Pausing blocks all internet access for the device while allowing it to stay on the LAN (it can still reach local resources like a NAS)."
+                        ]
+                    )
+                }
+
+                if blockedTotal > 5000 {
+                    FWGuidanceCard(
+                        icon: "xmark.shield",
+                        color: .orange,
+                        title: "Very High Block Count — Check for False Positives",
+                        steps: [
+                            "Open the Domains tab and identify the top blocked domains.",
+                            "Look for CDN domains (*.cloudfront.net, *.akamaihd.net), update servers, or app-specific APIs being blocked. These can silently break functionality.",
+                            "In the Firewalla app, go to Rules → Blocked Domains and check for overly broad rules.",
+                            "If a legitimate service is being blocked, whitelist the specific domain rather than disabling the entire category."
+                        ]
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - Claude companion context
+
+    private func firewallClaudeContext(_ snap: ConnectorSnapshot) -> String {
+        let wanMetric   = snap.metrics.first(where: { $0.key.hasPrefix("wan_") && !$0.key.contains("ip") })
+        let pubIP       = snap.metrics.first(where: { $0.key == "public_ip" })?.unit ?? "–"
+        let totalDev    = Int(snap.metrics.first(where: { $0.key == "total_devices" })?.value ?? 0)
+        let onlineDev   = Int(snap.metrics.first(where: { $0.key == "online_devices" })?.value ?? 0)
+        let pausedDev   = Int(snap.metrics.first(where: { $0.key == "paused_devices" })?.value ?? 0)
+        let alarmCount  = Int(snap.metrics.first(where: { $0.key == "active_alarms" })?.value ?? 0)
+        let vpnTunnels  = Int(snap.metrics.first(where: { $0.key == "vpn_tunnels" })?.value ?? 0)
+        let uptimeH     = snap.metrics.first(where: { $0.key == "uptime_h" })?.value
+        let blocked     = Int(snap.metrics.first(where: { $0.key == "total_blocked" })?.value ?? 0)
+        let topBWName   = snap.metrics.first(where: { $0.key == "top_bw_name" })?.unit ?? "–"
+        let topBWMB     = snap.metrics.first(where: { $0.key == "top_bw_device" })?.value
+        let topDomain   = snap.metrics.first(where: { $0.key == "unique_domains" })?.unit ?? "–"
+
+        let wanStatus = wanMetric?.severity == .ok ? "CONNECTED" : "OFFLINE"
+        let uptimeStr = uptimeH.map { $0 >= 24 ? String(format: "%.0fd", $0/24) : String(format: "%.0fh", $0) } ?? "unknown"
+        let alarms    = snap.events.filter { $0.type == "alarm" }
+        let criticalAlarms = alarms.filter { $0.severity == .critical }
+
+        var lines = [
+            "## Firewalla Gold — Security Gateway",
+            "WAN Status: \(wanStatus) (Public IP: \(pubIP))",
+            "Uptime: \(uptimeStr)",
+            "Devices: \(onlineDev) online / \(totalDev) total\(pausedDev > 0 ? " (\(pausedDev) paused)" : "")",
+            "Active Alarms: \(alarmCount) (\(criticalAlarms.count) critical)",
+            "Blocked Requests: \(blocked)",
+            "VPN Tunnels Active: \(vpnTunnels)",
+            "Top Bandwidth Device: \(topBWName)\(topBWMB != nil ? " (\(String(format: "%.0f", topBWMB!)) MB)" : "")",
+            "Top DNS Domain: \(topDomain)"
+        ]
+
+        if !alarms.isEmpty {
+            lines.append("")
+            lines.append("Recent Alarms:")
+            for alarm in alarms.prefix(5) {
+                let sev = alarm.severity == .critical ? "CRITICAL" : alarm.severity == .warning ? "WARN" : "INFO"
+                lines.append("  [\(sev)] \(alarm.description)")
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func firewallClaudeHint(_ snap: ConnectorSnapshot) -> String {
+        let criticalAlarms = snap.events.filter { $0.type == "alarm" && $0.severity == .critical }
+        if !criticalAlarms.isEmpty {
+            return "I have \(criticalAlarms.count) critical security alarm(s). What are they and how serious is this?"
+        }
+        let blocked = Int(snap.metrics.first(where: { $0.key == "total_blocked" })?.value ?? 0)
+        if blocked > 5000 {
+            return "My Firewalla has blocked \(blocked) requests. Is this normal? Should I be concerned?"
+        }
+        let wanActive = snap.metrics.first(where: { $0.key.hasPrefix("wan_") && !$0.key.contains("ip") })?.severity == .ok
+        if !wanActive {
+            return "My Firewalla is showing no WAN connectivity. What should I check first?"
+        }
+        return "Summarise the security and network posture of my home network based on this Firewalla snapshot."
     }
 
     // MARK: - Devices tab
@@ -1231,6 +1482,70 @@ private struct VPNPeerRow: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - FW Context Card (interpretation callout)
+
+private struct FWContextCard: View {
+    let color:    Color
+    let headline: String
+    let detail:   String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Rectangle()
+                .fill(color)
+                .frame(width: 3)
+                .cornerRadius(2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(headline)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(color.opacity(0.06)))
+    }
+}
+
+// MARK: - FW Guidance Card (actionable steps)
+
+private struct FWGuidanceCard: View {
+    let icon:  String
+    let color: Color
+    let title: String
+    let steps: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).foregroundStyle(color)
+                Text(title).font(.subheadline).fontWeight(.semibold).foregroundStyle(color)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("\(i + 1).")
+                            .font(.caption).fontWeight(.medium).foregroundStyle(.secondary)
+                            .frame(width: 18, alignment: .trailing)
+                        Text(step)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(color.opacity(0.07))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(color.opacity(0.2), lineWidth: 1))
+        )
     }
 }
 

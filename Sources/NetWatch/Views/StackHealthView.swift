@@ -39,6 +39,10 @@ struct StackHealthView: View {
                     if !d.recommendations.isEmpty {
                         recommendationSection(d)
                     }
+                    ClaudeCompanionCard(
+                        context: stackHealthClaudeContext(d),
+                        promptHint: stackHealthClaudeHint(d)
+                    )
                 } else {
                     emptyState
                 }
@@ -320,6 +324,43 @@ struct StackHealthView: View {
                 isRunning = false
             }
         }
+    }
+
+    // MARK: - Claude companion context
+
+    private func stackHealthClaudeContext(_ d: StackDiagnosis) -> String {
+        var lines = [
+            "## NetWatch Stack Health Diagnosis",
+            "Overall Score: \(d.healthScore)/100 — \(d.summary)",
+            "Root Cause: \(d.rootCause.rawValue) (\(d.confidence.rawValue) confidence)",
+            "",
+            "Layer Status:"
+        ]
+        for lr in d.layerResults {
+            let rc = lr.layer == d.rootCause ? " ← ROOT CAUSE" : ""
+            lines.append("  \(lr.layer.rawValue): \(lr.status.rawValue.uppercased()) (score \(lr.score)/100)\(rc)")
+            for ev in lr.evidence.prefix(2) {
+                lines.append("    • \(ev)")
+            }
+        }
+        if !d.recommendations.isEmpty {
+            lines.append("")
+            lines.append("Recommendations:")
+            for rec in d.recommendations {
+                lines.append("  → \(rec)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func stackHealthClaudeHint(_ d: StackDiagnosis) -> String {
+        if d.healthScore < 60 {
+            return "My network health score is \(d.healthScore)/100 with root cause '\(d.rootCause.rawValue)'. What does this mean and how do I fix it?"
+        }
+        if d.rootCause != .unknown {
+            return "Stack diagnosis identifies '\(d.rootCause.rawValue)' as the root cause. Is this a real issue and what should I do?"
+        }
+        return "My network health is \(d.healthScore)/100. Is everything actually healthy, or are there subtle issues I should investigate?"
     }
 
     // MARK: - Helpers
