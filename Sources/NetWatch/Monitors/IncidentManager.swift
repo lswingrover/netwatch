@@ -66,10 +66,14 @@ class IncidentManager: ObservableObject {
                                 traceroute: TracerouteResult?,
                                 connectorSnapshots: [ConnectorSnapshot] = []) async -> URL? {
         let ts = Self.timestamp()
-        let dir = baseDir.appendingPathComponent("incidents/incident_\(ts)")
+        let rawDir = baseDir.appendingPathComponent("incidents/incident_\(ts)")
         do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: rawDir, withIntermediateDirectories: true)
         } catch { return nil }
+        // Resolve any symlinks so that atomic file writes succeed (atomically:true
+        // fails when the path passes through a symlink — we write the temp file next
+        // to the real location, not next to the link).
+        let dir = rawDir.resolvingSymlinksInPath()
 
         // ── Run stack diagnosis ───────────────────────────────────────────────
         let diagnosis = StackDiagnosisEngine.diagnose(

@@ -88,10 +88,9 @@ struct StackDiagnosis {
         for lr in layerResults {
             let bar = String(repeating: "█", count: lr.score / 10)
                     + String(repeating: "░", count: 10 - lr.score / 10)
-            lines.append(String(format: "  %-16s  %-9s  %@  %d",
-                lr.layer.rawValue as NSString,
-                lr.status.rawValue as NSString,
-                bar, lr.score))
+            let layerPad  = lr.layer.rawValue.padding(toLength: 16, withPad: " ", startingAt: 0)
+            let statusPad = lr.status.rawValue.padding(toLength: 9,  withPad: " ", startingAt: 0)
+            lines.append("  \(layerPad)  \(statusPad)  \(bar)  \(lr.score)")
             for ev in lr.evidence {
                 lines.append("    • \(ev)")
             }
