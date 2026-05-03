@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [Unreleased] — Sprint 10 + fixes
+
+### Added
+- **ClaudeCompanionCard** — shared reusable component (`ClaudeCompanionCard` full card + `ClaudeCompanionButton` compact header variant); copies a formatted network-context prompt to clipboard and deep-links to `claude://` with `https://claude.ai/new` fallback
+- **Firewalla Overview — Security Interpretation section** — always-shown context cards explaining WAN status, alarm classification (critical / warning / info / clean), blocked request scale (< 50 / 50–500 / 500–5000 / 5000+), VPN tunnel state, and device density; `FWContextCard` sub-component
+- **Firewalla Overview — Guidance section** — conditionally shown numbered-step action cards: WAN offline recovery, critical alarm response protocol, paused device review, high block count investigation; `FWGuidanceCard` sub-component
+- **Orbi Overview — Mesh Interpretation section** — WAN status card, per-satellite backhaul type with band-specific education (wired / 6 GHz / 5 GHz / 2.4 GHz), client distribution analysis (sticky client detection), CPU/memory context, firmware update alert; `OrbiContextCard` sub-component
+- **Orbi Overview — Guidance section** — WAN offline recovery, offline satellite steps, 2.4 GHz backhaul improvement, firmware update walkthrough, high CPU reduction; `OrbiGuidanceCard` sub-component
+- **Stack Health — Claude companion card** — appears after the recommendations list; hint dynamically keyed to current health score and root-cause layer
+- **Overview (main) — Claude companion card** — bottom of the main dashboard; hint keyed to the worst current signal (multi-ping failure → low RSSI → high gateway RTT → default)
+- **Mobile API server** (`/ping`, `/health`, `/snapshot`, `/events`, `/subscribe`, `/unsubscribe`) — NWListener-based HTTP server started when `mobileAPIEnabled` is set in MonitorSettings; returns live StackDiagnosisEngine JSON
+- **StackDiagnosisEngine wired into `/health`** — the health endpoint now runs a real cross-layer diagnosis on every request, not a placeholder
+
+### Fixed
+- **`StackDiagnosis.report()` crash (SIGSEGV / PAC failure on ARM64)** — `String(format: "%-16s", nsstring)` passes an NSString pointer as a C string; ARM64 pointer authentication rejects it at `_platform_strlen`. Replaced with Swift `.padding(toLength:withPad:startingAt:)`
+- **Incident bundle always empty on `~/network_tests` symlink** — `String.write(to:atomically:true)` creates a temp file then renames; this fails silently when the destination path passes through a symlink. Fixed by resolving the symlink with `.resolvingSymlinksInPath()` before all file writes in `bundleIncident`
+- **NWListener `@MainActor` isolation errors** — moved listener start/stop to `@MainActor`-isolated context; eliminated `nonisolated` actor-crossing warnings that prevented the API server from launching
+
+---
+
 ## [1.3.1] — 2026-05-03
 
 ### Added
