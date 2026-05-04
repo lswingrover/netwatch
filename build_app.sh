@@ -139,18 +139,12 @@ killall Dock   2>/dev/null || true
 sleep 2
 echo "✅  Registered + icon cache nuked"
 
-# ── 7. Force icon via NSWorkspace (beats Dock cache) ──────────────────────────
+# ── 7. Strip custom icon xattr (ensures Dock reads icns, not a stale xattr) ────
 echo ""
-echo "▶ Setting icon via NSWorkspace..."
-swift -e "
-import AppKit
-let path = \"$INSTALL_DIR/$APP_BUNDLE\"
-let icns = path + \"/Contents/Resources/AppIcon.icns\"
-if let icon = NSImage(contentsOfFile: icns) {
-    let ok = NSWorkspace.shared.setIcon(icon, forFile: path, options: [])
-    print(ok ? \"✅  NSWorkspace.setIcon succeeded\" : \"⚠️   NSWorkspace.setIcon returned false\")
-} else { print(\"⚠️   AppIcon.icns not found\") }
-" 2>/dev/null || echo "⚠️   swift -e unavailable — skipping"
+echo "▶ Clearing custom icon xattr..."
+xattr -d com.apple.FinderInfo "$INSTALL_DIR/$APP_BUNDLE" 2>/dev/null || true
+xattr -d com.apple.ResourceFork "$INSTALL_DIR/$APP_BUNDLE" 2>/dev/null || true
+echo "✅  Custom icon xattr cleared"
 
 # ── 8. Launch ─────────────────────────────────────────────────────────────────
 echo ""
@@ -159,8 +153,8 @@ open "$INSTALL_DIR/$APP_BUNDLE"
 
 echo ""
 echo "╔════════════════════════════════════════════╗"
-echo "║  NetWatch installed to /Applications  ✅   ║"
+echo "║  NetWatch installed to ~/Applications ✅   ║"
 echo "║                                            ║"
-echo "║  Drag to your Dock from /Applications      ║"
-echo "║  or: open /Applications/NetWatch.app       ║"
+echo "║  Drag to your Dock from ~/Applications     ║"
+echo "║  or: open ~/Applications/NetWatch.app      ║"
 echo "╚════════════════════════════════════════════╝"

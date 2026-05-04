@@ -52,17 +52,17 @@ func drawIcon(size: CGFloat) -> NSImage {
     // Outermost radius * 2 ≈ 83% of icon width — matches MacWatch visual weight.
 
     // Source at 42% from bottom (just below vertical center).
-    // Outer arc radius = 0.28×size → arcs fully contained, no clipping.
-    // Outer arc top reaches 0.70 from bottom. All endpoints stay within icon bounds.
-    // Line width matches MacWatch (size/32). Visual mass comparable to MacWatch waveform.
+    // Outer arc radius = 0.21×size → arcs fully contained, matches MacWatch visual weight.
+    // Outer arc top reaches 0.63 from bottom. All endpoints stay within icon bounds.
+    // Line width size/38. NOTE: do NOT increase radii — 0.28 was too large in Dock.
     let sourceX = size * 0.50
     let sourceY = size * 0.42
-    let lw      = max(1.5, size / 32.0)
+    let lw      = max(1.5, size / 38.0)
 
     let radii: [(CGFloat, CGFloat)] = [
-        (size * 0.11, 0.92),   // innermost
-        (size * 0.20, 0.80),   // middle
-        (size * 0.28, 0.65),   // outermost
+        (size * 0.09, 0.92),   // innermost
+        (size * 0.15, 0.80),   // middle
+        (size * 0.21, 0.65),   // outermost
     ]
 
     for (r, alpha) in radii {
