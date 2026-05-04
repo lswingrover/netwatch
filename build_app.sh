@@ -1,7 +1,7 @@
 #!/bin/bash
-# build_app.sh — Build NetWatch.app and install to /Applications
+# build_app.sh — Build NetWatch.app and install to ~/Applications
 # Usage: ./build_app.sh [--debug] [--no-install]
-# After first run: open /Applications/NetWatch.app
+# After first run: open ~/Applications/NetWatch.app
 
 set -euo pipefail
 
@@ -18,7 +18,8 @@ for arg in "$@"; do
   esac
 done
 
-INSTALL_DIR="/Applications"
+INSTALL_DIR="$HOME/Applications"
+mkdir -p "$INSTALL_DIR"
 APP_BUNDLE="$APP_NAME.app"
 BUILD_DIR="$SCRIPT_DIR/.build"
 BINARY="$BUILD_DIR/$CONFIG/$APP_NAME"
@@ -98,6 +99,15 @@ fi
 
 echo ""
 echo "▶ Installing to $INSTALL_DIR/$APP_BUNDLE..."
+
+# Clean up old system-wide install if it exists (legacy: was /Applications)
+if [[ -d "/Applications/$APP_BUNDLE" ]]; then
+  echo "   Removing old /Applications/$APP_BUNDLE..."
+  osascript -e "tell application \"$APP_NAME\" to quit" 2>/dev/null || true
+  sleep 0.3
+  rm -rf "/Applications/$APP_BUNDLE"
+fi
+
 if [[ -d "$INSTALL_DIR/$APP_BUNDLE" ]]; then
   # Quit running instance if any
   osascript -e "tell application \"$APP_NAME\" to quit" 2>/dev/null || true

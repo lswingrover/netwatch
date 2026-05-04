@@ -31,7 +31,7 @@ private struct IncidentListTab: View {
                 IncidentRow(incident: incident).tag(incident.id)
             }
             .listStyle(.sidebar)
-            .frame(minWidth: 260, idealWidth: 300)
+            .frame(minWidth: 200, idealWidth: 240, maxWidth: 300)
             .overlay {
                 if incidentManager.incidents.isEmpty {
                     VStack(spacing: 8) {
@@ -44,6 +44,7 @@ private struct IncidentListTab: View {
 
             if let inc = selected {
                 IncidentDetailView(incident: inc)
+                    .frame(minWidth: 400)
             } else {
                 Text("Select an incident")
                     .foregroundStyle(.secondary)
@@ -214,12 +215,17 @@ struct IncidentDetailView: View {
                     }
                 }
 
+                ClaudeCompanionCard(
+                    context: incidentClaudeContext(),
+                    promptHint: "This is a network incident from \(incident.formattedDate). Reason: '\(incident.reason)'. What likely caused this and what should I investigate or fix?"
+                )
+
                 Spacer()
             }
             .padding(20)
         }
         .onAppear { loadFiles() }
-        .onChange(of: incident.id) { loadFiles() }
+        .onChange(of: incident.id) { _, _ in loadFiles() }
     }
 
     private func loadFiles() {
@@ -227,5 +233,22 @@ struct IncidentDetailView: View {
         let ticketFile = incident.bundlePath.appendingPathComponent("tier2_ticket.txt")
         incidentText = (try? String(contentsOf: incFile)) ?? ""
         ticketText   = (try? String(contentsOf: ticketFile)) ?? ""
+    }
+
+    private func incidentClaudeContext() -> String {
+        var lines = [
+            "## NetWatch Incident Report",
+            "Reason: \(incident.reason)",
+            "Subject: \(incident.subject)",
+            "Date: \(incident.formattedDate)",
+            ""
+        ]
+        if !incidentText.isEmpty {
+            lines.append("--- Raw Incident Data ---")
+            lines.append(String(incidentText.prefix(2500)))
+        } else {
+            lines.append("(Full incident bundle at: \(incident.bundlePath.lastPathComponent))")
+        }
+        return lines.joined(separator: "\n")
     }
 }

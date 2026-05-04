@@ -66,11 +66,21 @@ struct TopologyView: View {
     @State private var openPortCount: Int    = 0
 
     var body: some View {
-        ScrollView([.horizontal, .vertical]) {
-            topologyCanvas
-                .padding(40)
+        VStack(spacing: 0) {
+            ScrollView([.horizontal, .vertical]) {
+                topologyCanvas
+                    .padding(40)
+            }
+            .background(Color(NSColor.windowBackgroundColor))
+
+            Divider()
+
+            ClaudeCompanionCard(
+                context: topologyClaudeContext(),
+                promptHint: topologyClaudeHint()
+            )
+            .padding(16)
         }
-        .background(Color(NSColor.windowBackgroundColor))
         .task {
             // Count listening ports via lsof
             let output = await ProcessRunner.runPermissive(
@@ -79,6 +89,58 @@ struct TopologyView: View {
                 .filter { $0.contains("LISTEN") }.count
             openPortCount = count
         }
+    }
+
+    private func topologyClaudeContext() -> String {
+        var lines = ["## NetWatch Network Topology"]
+
+        let pingTargets = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
+        let internetStates = monitor.pingStates.filter { pingTargets.contains($0.target.host) }
+        let internetOk = internetStates.allSatisfy { $0.isOnline }
+        lines.append("Internet: \(internetOk ? "✅ Reachable" : "❌ Degraded/Down")")
+
+        for id in ["cm3000", "firewalla", "orbi"] {
+            let snap = connectorManager.snapshot(for: id)
+            let hasCritical = snap?.events.contains { $0.severity == .critical } ?? false
+            let hasWarn     = snap?.events.contains { $0.severity == .warning  } ?? false
+            let statusStr = snap == nil ? "Unknown (not connected)" : hasCritical ? "⚠️ Critical" : hasWarn ? "⚡ Warning" : "✅ Healthy"
+            let displayName = id == "cm3000" ? "CM3000 Modem" : id == "firewalla" ? "Firewalla" : "Orbi Router"
+            if let snap = snap, let summary = snap.metrics.first {
+                lines.append("\(displayName): \(statusStr) | \(summary.label): \(String(format: "%.1f", summary.value)) \(summary.unit)")
+            } else {
+                lines.append("\(displayName): \(statusStr)")
+            }
+        }
+
+        let macIP = ifMonitor.ipAddress.isEmpty ? "unknown" : ifMonitor.ipAddress
+        lines.append("This Mac: \(macIP) | Listening ports: \(openPortCount)")
+
+        let rxRate = ifMonitor.currentRate.rxBytesPerSec
+        let txRate = ifMonitor.currentRate.txBytesPerSec
+        if rxRate > 500 || txRate > 500 {
+            lines.append("Live throughput: ↓ \(rxRate.humanBytes)/s  ↑ \(txRate.humanBytes)/s")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func topologyClaudeHint() -> String {
+        let hasCritical = ["cm3000", "firewalla", "orbi"].contains {
+            connectorManager.snapshot(for: $0)?.events.contains { $0.severity == .critical } ?? false
+        }
+        let pingTargets = ["1.1.1.1", "8.8.8.8", "9.9.9.9"]
+        let internetDown = monitor.pingStates.filter { pingTargets.contains($0.target.host) }.contains { !$0.isOnline }
+
+        if internetDown && hasCritical {
+            return "My topology shows both internet connectivity issues AND critical device alerts. Where should I start troubleshooting?"
+        }
+        if hasCritical {
+            return "One or more devices in my network topology are showing critical alerts. What does that mean and what should I check?"
+        }
+        if internetDown {
+            return "Internet pings are failing. Looking at my topology, where is the likely break point?"
+        }
+        return "Interpret my network topology — is everything connected as expected and are there any weak points?"
     }
 
     // MARK: - Canvas

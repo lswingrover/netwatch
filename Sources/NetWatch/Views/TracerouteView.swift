@@ -237,10 +237,58 @@ struct TracerouteDetailView: View {
                     .padding(.horizontal, 4)
                 }
 
+                ClaudeCompanionCard(
+                    context: tracerouteClaudeContext(),
+                    promptHint: tracerouteClaudeHint()
+                )
+
                 Spacer()
             }
             .padding(20)
         }
+    }
+
+    private func tracerouteClaudeContext() -> String {
+        var lines = [
+            "## NetWatch Traceroute — \(result.target)",
+            "\(result.hopCount) hops | Completed: \(result.timestamp.formatted(date: .omitted, time: .shortened))"
+        ]
+        let reachableHops = result.hops.filter { !$0.isTimeout }
+        if let lastHop = reachableHops.last, let rtt = lastHop.avgRTT {
+            lines.append(String(format: "Final RTT to destination: %.1f ms", rtt))
+        }
+        let timeouts = result.hops.filter { $0.isTimeout }.count
+        if timeouts > 0 {
+            lines.append("\(timeouts) hops timed out (* * *)")
+        }
+        lines.append("")
+        lines.append("Hop breakdown:")
+        for hop in result.hops {
+            let ip = hop.ip ?? "*"
+            if hop.isTimeout {
+                lines.append("  Hop \(hop.id): * * * (timeout)")
+            } else {
+                let rttStr = hop.avgRTT.map { String(format: "%.1f ms avg", $0) } ?? "–"
+                var line = "  Hop \(hop.id): \(ip) — \(rttStr)"
+                if let ip = hop.ip, let geo = geoCache[ip] {
+                    line += " [\(geo.asnShort), \(geo.location)]"
+                }
+                lines.append(line)
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func tracerouteClaudeHint() -> String {
+        let timeouts = result.hops.filter { $0.isTimeout }.count
+        if timeouts > result.hopCount / 2 {
+            return "More than half the hops in my traceroute to \(result.target) timed out. Does that mean there's an actual problem, or is that normal?"
+        }
+        if let lastReachable = result.hops.filter({ !$0.isTimeout }).last,
+           let rtt = lastReachable.avgRTT, rtt > 100 {
+            return String(format: "Traceroute to %@ shows %.0f ms at hop %d. Where is the latency being added?", result.target, rtt, lastReachable.id)
+        }
+        return "Interpret this traceroute to \(result.target) — is the path healthy and are any hops concerning?"
     }
 
     @ViewBuilder

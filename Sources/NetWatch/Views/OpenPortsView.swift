@@ -36,8 +36,8 @@ struct ListeningPort: Identifiable {
         case 4000:  return "Common dev server"
         case 5000:  return "Common dev server / AirPlay receiver"
         case 5432:  return "PostgreSQL"
-        case 6000...6999: return "X11"
         case 6379:  return "Redis"
+        case 6000...6999: return "X11"
         case 7000:  return "AirPlay / Rapport"
         case 7100:  return "Font Service"
         case 8080:  return "HTTP alt / dev server"
@@ -52,9 +52,9 @@ struct ListeningPort: Identifiable {
 
     /// Security posture of this port.
     var exposure: PortExposure {
-        if isLoopback { return .loopback }
+        if isLoopback  { return .loopback }
+        if isWildcard  { return .exposed }   // wildcard beats well-known: port 80 on 0.0.0.0 is exposed
         if port < 1024 { return .wellKnown }
-        if isWildcard  { return .exposed }
         return .bound
     }
 }
@@ -100,6 +100,14 @@ struct OpenPortsView: View {
             }
         }
         .onAppear { refresh() }
+        if !ports.isEmpty {
+            Divider()
+            ClaudeCompanionCard(
+                context: openPortsClaudeContext(),
+                promptHint: openPortsClaudeHint()
+            )
+            .padding(16)
+        }
     }
 
     // MARK: - Header
@@ -141,31 +149,32 @@ struct OpenPortsView: View {
     // MARK: - Filter / sort bar
 
     private var filterBar: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary).font(.caption)
-                TextField("Filter by port, process, or address…", text: $filterText)
-                    .textFieldStyle(.plain).font(.caption)
-            }
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(Color(NSColor.controlBackgroundColor))
-            .cornerRadius(6)
-            .frame(maxWidth: 280)
-
-            Text("Sort:")
-                .font(.caption2).foregroundStyle(.secondary)
-            Picker("Sort", selection: $sortOrder) {
-                ForEach(SortField.allCases, id: \.self) { f in
-                    Text(f.rawValue).tag(f)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary).font(.caption)
+                    TextField("Filter by port, process, or address…", text: $filterText)
+                        .textFieldStyle(.plain).font(.caption)
                 }
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 220)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(6)
+                .frame(maxWidth: 280)
 
-            Spacer()
+                Picker("Sort", selection: $sortOrder) {
+                    ForEach(SortField.allCases, id: \.self) { f in
+                        Text(f.rawValue).tag(f)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 220)
+
+                Spacer()
+            }
 
             exposureLegend
+                .padding(.leading, 2)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
@@ -304,6 +313,47 @@ struct OpenPortsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    // MARK: - Claude context
+
+    private func openPortsClaudeContext() -> String {
+        let exposed   = ports.filter { $0.exposure == .exposed }
+        let wellKnown = ports.filter { $0.exposure == .wellKnown }
+        let loopback  = ports.filter { $0.exposure == .loopback }
+        var lines = [
+            "## NetWatch Open Ports — This Mac",
+            "Total TCP listening: \(ports.count)",
+            "Bound to all interfaces (⚠️ exposed): \(exposed.count)",
+            "Well-known ports: \(wellKnown.count)",
+            "Loopback only: \(loopback.count)"
+        ]
+        if !exposed.isEmpty {
+            lines.append("")
+            lines.append("Exposed ports (all interfaces):")
+            for p in exposed.sorted(by: { $0.port < $1.port }) {
+                let hint = p.serviceHint.isEmpty ? "" : " — \(p.serviceHint)"
+                lines.append("  Port \(p.port)/\(p.proto) [\(p.address)]: \(p.process) (PID \(p.pid))\(hint)")
+            }
+        }
+        if !wellKnown.isEmpty {
+            lines.append("")
+            lines.append("Well-known ports (specific interface):")
+            for p in wellKnown.sorted(by: { $0.port < $1.port }).prefix(8) {
+                let hint = p.serviceHint.isEmpty ? "" : " — \(p.serviceHint)"
+                lines.append("  Port \(p.port): \(p.process)\(hint)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func openPortsClaudeHint() -> String {
+        let exposed = ports.filter { $0.exposure == .exposed }
+        if !exposed.isEmpty {
+            let portList = exposed.prefix(3).map { "\($0.port)" }.joined(separator: ", ")
+            return "I have \(exposed.count) port(s) bound to all interfaces: \(portList). Are any of these a security risk I should address?"
+        }
+        return "I have \(ports.count) TCP listening ports on this Mac. Are there any that look suspicious or unnecessary?"
+    }
+
     // MARK: - Scan
 
     private func refresh() {
@@ -352,14 +402,17 @@ struct OpenPortsView: View {
 
         for line in lines {
             guard !line.isEmpty else { continue }
-            // lsof columns: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME
-            // NAME field looks like: *:7000, 127.0.0.1:5432, [::1]:6379
+            // lsof columns: COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME [STATE]
+            // NAME field: "*:7000 (LISTEN)" — lsof appends " (LISTEN)" even with -sTCP:LISTEN.
+            // Last column is "(LISTEN)"; addr:port is second-to-last when state is present.
             let cols = line.split(separator: " ", omittingEmptySubsequences: true)
             guard cols.count >= 9 else { continue }
 
             let command = String(cols[0])
             guard let pid = Int(cols[1]) else { continue }
-            let nameField = String(cols[cols.count - 1])  // last column = NAME
+            // Strip trailing "(STATE)" token if present so we get the addr:port field.
+            let rawLast = String(cols[cols.count - 1])
+            let nameField = rawLast.hasPrefix("(") ? String(cols[cols.count - 2]) : rawLast
 
             // Parse address:port from NAME
             let (addr, port) = parseAddressPort(nameField)

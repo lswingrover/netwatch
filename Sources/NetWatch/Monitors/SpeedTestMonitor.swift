@@ -250,8 +250,8 @@ final class SpeedTestMonitor: ObservableObject {
 
             process.terminationHandler = { p in
                 timer.cancel()
-                let out  = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                let err  = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let out  = String(data: stdoutPipe.fileHandleForReading.availableData, encoding: .utf8) ?? ""
+                let err  = String(data: stderrPipe.fileHandleForReading.availableData, encoding: .utf8) ?? ""
                 if p.terminationStatus == 0 {
                     resumeOnce(.success(out))
                 } else {

@@ -293,6 +293,11 @@ struct PingDetailView: View {
                     .frame(maxHeight: 300)
                 }
 
+                ClaudeCompanionCard(
+                    context: pingClaudeContext(),
+                    promptHint: pingClaudeHint()
+                )
+
                 Spacer()
             }
             .padding(20)
@@ -307,5 +312,38 @@ struct PingDetailView: View {
 
     func rttColor(_ rtt: Double) -> Color {
         rtt < 50 ? .green : rtt < 100 ? .yellow : .red
+    }
+
+    private func pingClaudeContext() -> String {
+        let loss = (1 - state.successRate) * 100
+        var lines = [
+            "## NetWatch Ping Monitor — \(state.target.displayName)",
+            String(format: "Last RTT: %@ | Avg: %@ | Jitter: %@",
+                   state.lastRTT.rttString, state.avgRTT.rttString, state.jitter.rttString),
+            String(format: "Packet Loss: %.1f%% | Success Rate: %.1f%%", loss, state.successRate * 100),
+            String(format: "Min: %@ | Max: %@", state.minRTT.rttString, state.maxRTT.rttString),
+            String(format: "p50: %@ | p95: %@ | p99: %@",
+                   state.p50.rttString, state.p95.rttString, state.p99.rttString),
+            "Trend: \(state.trend.symbol) | Samples: \(state.results.count)"
+        ]
+        let recentFailures = state.results.suffix(10).filter { !$0.success }.count
+        if recentFailures > 0 {
+            lines.append("\(recentFailures)/10 recent pings failed")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func pingClaudeHint() -> String {
+        let loss = (1 - state.successRate) * 100
+        if loss > 10 {
+            return String(format: "%.1f%% packet loss to %@. Is this a routing problem, ISP issue, or something local?", loss, state.target.displayName)
+        }
+        if let jitter = state.jitter, jitter > 20 {
+            return String(format: "Jitter is %.1f ms to %@. What causes high jitter and does it affect my network?", jitter, state.target.displayName)
+        }
+        if let rtt = state.avgRTT, rtt > 100 {
+            return String(format: "Average RTT is %.0f ms to %@. Is that too high for my use case?", rtt, state.target.displayName)
+        }
+        return "Ping stats to \(state.target.displayName): are these healthy or should I be concerned about anything?"
     }
 }

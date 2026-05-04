@@ -234,11 +234,52 @@ struct DNSDetailView: View {
                     .frame(maxHeight: 300)
                 }
 
+                ClaudeCompanionCard(
+                    context: dnsClaudeContext(),
+                    promptHint: dnsClaudeHint()
+                )
+
                 Spacer()
             }
             .padding(20)
         }
         .navigationTitle(state.target.domain)
+    }
+
+    private func dnsClaudeContext() -> String {
+        var lines = [
+            "## NetWatch DNS Monitor — \(state.target.domain)",
+            String(format: "Last Query: %@ | Avg: %@",
+                   state.lastQueryTime.rttString, state.avgQueryTime.rttString),
+            String(format: "Success Rate: %.1f%% | Samples: \(state.results.count)", state.successRate * 100)
+        ]
+        if !state.resolverTimes.isEmpty {
+            lines.append("Resolver Comparison (last query):")
+            for resolver in ["System", "Cloudflare", "Google", "Quad9"] {
+                if let timing = state.resolverTimes[resolver] {
+                    if let ms = timing {
+                        lines.append(String(format: "  \(resolver): %.1f ms", ms))
+                    } else {
+                        lines.append("  \(resolver): TIMEOUT")
+                    }
+                }
+            }
+        }
+        let recentFail = state.results.suffix(10).filter { !$0.success }.count
+        if recentFail > 0 {
+            lines.append("\(recentFail)/10 recent queries failed")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func dnsClaudeHint() -> String {
+        if state.successRate < 0.9 {
+            return String(format: "DNS resolution for %@ is failing %.0f%% of the time. What does that indicate?", state.target.domain, (1 - state.successRate) * 100)
+        }
+        if let avg = state.avgQueryTime, avg > 150 {
+            return String(format: "DNS queries for %@ average %.0f ms. Is that slow and what could cause high DNS latency?", state.target.domain, avg)
+        }
+        return "DNS results for \(state.target.domain): are these healthy, and what should I watch for?"
     }
 
     func qColor(_ t: Double?) -> Color {

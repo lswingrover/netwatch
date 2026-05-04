@@ -53,10 +53,55 @@ struct TimelineView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 4)
 
+                ClaudeCompanionCard(
+                    context: timelineClaudeContext(),
+                    promptHint: timelineClaudeHint()
+                )
+                .padding(.horizontal, 20)
+
                 Spacer(minLength: 20)
             }
             .padding(.vertical, 20)
         }
+    }
+
+    private func timelineClaudeContext() -> String {
+        var lines = ["## NetWatch Uptime Timeline (last 15 minutes)"]
+        if monitor.pingStates.isEmpty {
+            lines.append("No ping targets configured.")
+        } else {
+            lines.append("Ping Targets:")
+            for ps in monitor.pingStates {
+                let loss = (1 - ps.successRate) * 100
+                let status = ps.isOnline ? "UP" : "DOWN"
+                lines.append(String(format: "  \(ps.target.displayName): \(status) | %.0f%% success | avg %@", ps.successRate * 100, ps.avgRTT.rttString))
+                if loss > 5 {
+                    lines.append(String(format: "    ⚠️ %.1f%% packet loss", loss))
+                }
+            }
+        }
+        if !monitor.dnsStates.isEmpty {
+            lines.append("")
+            lines.append("DNS Targets:")
+            for ds in monitor.dnsStates {
+                lines.append(String(format: "  \(ds.target.domain): %.0f%% success | avg %@", ds.successRate * 100, ds.avgQueryTime.rttString))
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func timelineClaudeHint() -> String {
+        let failingPing = monitor.pingStates.filter { !$0.isOnline || $0.successRate < 0.9 }
+        let failingDNS  = monitor.dnsStates.filter  { $0.successRate < 0.9 }
+        if !failingPing.isEmpty {
+            let names = failingPing.map { $0.target.displayName }.joined(separator: ", ")
+            return "The following ping targets are degraded: \(names). Is this a routing issue, ISP problem, or local?"
+        }
+        if !failingDNS.isEmpty {
+            let domains = failingDNS.map { $0.target.domain }.joined(separator: ", ")
+            return "DNS resolution is degraded for: \(domains). What could cause intermittent DNS failures?"
+        }
+        return "Everything looks green in the timeline. Are there any subtle patterns I should be aware of?"
     }
 
     @ViewBuilder

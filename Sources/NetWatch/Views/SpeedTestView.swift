@@ -23,6 +23,10 @@ struct SpeedTestView: View {
                     historyChart
                     historyTable
                 }
+                ClaudeCompanionCard(
+                    context: speedTestClaudeContext(),
+                    promptHint: speedTestClaudeHint()
+                )
                 Spacer(minLength: 40)
             }
             .padding(20)
@@ -66,6 +70,47 @@ struct SpeedTestView: View {
                 icon:     "waveform.path.ecg"
             )
         }
+    }
+
+    private func speedTestClaudeContext() -> String {
+        var lines = ["## NetWatch Speed Test Results"]
+        if let r = speedTestMonitor.lastResult {
+            if r.isSuccess {
+                lines.append(String(format: "Download: %.1f Mbps | Upload: %.1f Mbps", r.downloadMbps, r.uploadMbps))
+                lines.append(String(format: "Latency: %.0f ms | Base RTT: %.0f ms | Responsiveness: %d RPM", r.latencyMs, r.baseRttMs, r.responsiveness))
+                lines.append("Quality: \(r.quality.label) | Responsiveness: \(r.responsivenessLabel)")
+                lines.append("DL flows: \(r.downloadFlows) | UL flows: \(r.uploadFlows)")
+                lines.append("Tested: \(r.timestamp.formatted(date: .abbreviated, time: .shortened))")
+            } else {
+                lines.append("Last test FAILED: \(r.error ?? "unknown error")")
+            }
+        } else {
+            lines.append("No speed test results yet.")
+        }
+        if let dl = speedTestMonitor.avgDownloadMbps, let ul = speedTestMonitor.avgUploadMbps {
+            lines.append(String(format: "10-test avg: %.1f Mbps ↓ · %.1f Mbps ↑", dl, ul))
+        }
+        let successfulHistory = speedTestMonitor.history.filter(\.isSuccess)
+        if !successfulHistory.isEmpty {
+            lines.append("History (\(successfulHistory.count) tests stored):")
+            for r in successfulHistory.prefix(5) {
+                lines.append(String(format: "  \(r.timestamp.formatted(date: .omitted, time: .shortened)): %.1f↓ / %.1f↑ Mbps, %.0f ms", r.downloadMbps, r.uploadMbps, r.latencyMs))
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func speedTestClaudeHint() -> String {
+        guard let r = speedTestMonitor.lastResult, r.isSuccess else {
+            return "My speed test failed. What could cause networkQuality to fail and how do I troubleshoot it?"
+        }
+        if r.downloadMbps < 50 {
+            return String(format: "My download is only %.1f Mbps. Is that normal for my plan and what could be limiting it?", r.downloadMbps)
+        }
+        if r.latencyMs > 80 {
+            return String(format: "Download is fine but latency is %.0f ms. Why is latency high even with decent throughput?", r.latencyMs)
+        }
+        return String(format: "Speed test: %.1f↓ / %.1f↑ Mbps, %.0f ms. Is this what I should expect, and are there any red flags?", r.downloadMbps, r.uploadMbps, r.latencyMs)
     }
 
     private func tileColor(_ val: Double?, threshold: Double?) -> Color {
@@ -292,12 +337,12 @@ private struct SpeedHistoryChart: View {
                 }
 
                 // Download line
-                if downloadValues.count >= 2 {
+                if downloadValues.count >= 1 {
                     speedLine(values: downloadValues, color: .blue, geo: geo, range: range, minV: minV)
                 }
 
                 // Upload line
-                if uploadValues.count >= 2 {
+                if uploadValues.count >= 1 {
                     speedLine(values: uploadValues, color: .green, geo: geo, range: range, minV: minV)
                 }
             }
@@ -311,6 +356,14 @@ private struct SpeedHistoryChart: View {
         let n = values.count
 
         return Path { path in
+            if n == 1 {
+                // Single point — 2px segment with round cap renders as a visible dot
+                let x = w / 2
+                let y = h * (1.0 - CGFloat((values[0] - minV) / range))
+                path.move(to: CGPoint(x: x - 1, y: y))
+                path.addLine(to: CGPoint(x: x + 1, y: y))
+                return
+            }
             for (i, v) in values.enumerated() {
                 let x = w * CGFloat(i) / CGFloat(max(1, n - 1))
                 let y = h * (1.0 - CGFloat((v - minV) / range))

@@ -2,6 +2,10 @@
 /// Generates NetWatch.icns using AppKit.
 /// Usage: swift make_icon.swift <output_dir>
 /// Output: <output_dir>/AppIcon.icns
+///
+/// Design: deep navy gradient background (same family as MacWatch), white wifi
+/// signal arcs (complementary to MacWatch's EKG — "network signal" vs "system vitals"),
+/// blue accent dot at the source point. Same color palette, different motif.
 
 import AppKit
 import Foundation
@@ -18,89 +22,97 @@ func drawIcon(size: CGFloat) -> NSImage {
     let ctx = NSGraphicsContext.current!.cgContext
     let rect = CGRect(origin: .zero, size: CGSize(width: size, height: size))
 
-    // Background: dark navy gradient
+    // ── Background: deep navy gradient (same as MacWatch) ──────────────────
     let gradient = CGGradient(
         colorsSpace: CGColorSpaceCreateDeviceRGB(),
         colors: [
-            CGColor(red: 0.05, green: 0.10, blue: 0.22, alpha: 1), // deep navy
-            CGColor(red: 0.08, green: 0.18, blue: 0.38, alpha: 1), // mid blue
+            CGColor(red: 0.055, green: 0.165, blue: 0.392, alpha: 1), // top navy  (14,42,100)
+            CGColor(red: 0.024, green: 0.078, blue: 0.235, alpha: 1), // bottom    (6,20,60)
         ] as CFArray,
         locations: [0, 1]
     )!
 
-    // Rounded rect clip
     let radius = size * 0.22
     let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
     ctx.addPath(path)
     ctx.clip()
 
     ctx.drawLinearGradient(gradient,
-        start: CGPoint(x: size * 0.2, y: size),
-        end:   CGPoint(x: size * 0.8, y: 0),
+        start: CGPoint(x: size * 0.5, y: size),
+        end:   CGPoint(x: size * 0.5, y: 0),
         options: [])
 
-    // Subtle inner glow ring
-    ctx.setStrokeColor(CGColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 0.15))
-    ctx.setLineWidth(size * 0.015)
-    let inset = size * 0.04
-    let glowPath = CGPath(roundedRect: rect.insetBy(dx: inset, dy: inset),
-                          cornerWidth: radius - inset, cornerHeight: radius - inset, transform: nil)
-    ctx.addPath(glowPath)
-    ctx.strokePath()
+    // ── Wifi signal arcs ────────────────────────────────────────────────────
+    // Three concentric arcs radiating upward — standard wifi orientation.
+    // AppKit y-up: (0,0) = bottom-left. sourceY in lower portion so arcs open upward.
+    // clockwise:true in AppKit y-up = CW in math coords = arc goes through north (top).
+    //
+    // Arc geometry: center at sourceX,sourceY. startAngle=225° (lower-left of circle),
+    // endAngle=315° (lower-right). Clockwise through 180°→90°→0° = upward-opening arc.
+    // Outermost radius * 2 ≈ 83% of icon width — matches MacWatch visual weight.
 
-    // Draw wifi arcs (3 arcs + dot)
-    let cx = size * 0.5
-    let cy = size * 0.30    // lower center — arcs fan upward
-    let dotR = size * 0.055
+    // Source at 42% from bottom (just below vertical center).
+    // Outer arc radius = 0.28×size → arcs fully contained, no clipping.
+    // Outer arc top reaches 0.70 from bottom. All endpoints stay within icon bounds.
+    // Line width matches MacWatch (size/32). Visual mass comparable to MacWatch waveform.
+    let sourceX = size * 0.50
+    let sourceY = size * 0.42
+    let lw      = max(1.5, size / 32.0)
 
-    // Draw from largest to smallest so colors overlap correctly
-    let arcColors: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [
-        (0.2,  0.6,  1.0,  0.35),
-        (0.35, 0.72, 1.0,  0.60),
-        (0.55, 0.85, 1.0,  0.85),
+    let radii: [(CGFloat, CGFloat)] = [
+        (size * 0.11, 0.92),   // innermost
+        (size * 0.20, 0.80),   // middle
+        (size * 0.28, 0.65),   // outermost
     ]
-    let arcRadii: [CGFloat] = [size * 0.40, size * 0.27, size * 0.14]
-    let arcWidth = size * 0.055
-    // NSBezierPath uses AppKit degrees in y-up coordinate system:
-    // 0° = right, 90° = TOP, 180° = left.
-    // CCW from 36° through 90° to 144° → arcs fan UPWARD from cy.
-    for (r, (red, green, blue, alpha)) in zip(arcRadii, arcColors) {
+
+    for (r, alpha) in radii {
         let arcPath = NSBezierPath()
-        arcPath.appendArc(withCenter: NSPoint(x: cx, y: cy),
-                          radius: r,
-                          startAngle: 36,
-                          endAngle: 144,
-                          clockwise: false)
-        arcPath.lineWidth = arcWidth
+        // startAngle=225° (SW), endAngle=315° (SE), clockwise=true → arc passes through
+        // north (top), producing an upward-opening wifi arc in AppKit y-up coords.
+        arcPath.appendArc(
+            withCenter: NSPoint(x: sourceX, y: sourceY),
+            radius:     r,
+            startAngle: 225,
+            endAngle:   315,
+            clockwise:  true
+        )
+        arcPath.lineWidth    = lw
         arcPath.lineCapStyle = .round
-        NSColor(calibratedRed: red, green: green, blue: blue, alpha: alpha).setStroke()
+        NSColor(white: 1.0, alpha: alpha).setStroke()
         arcPath.stroke()
     }
 
-    // Center dot
+    // ── Accent dot at the arc source point (same blue family as MacWatch) ──
+    // Sits at sourceX, sourceY — the origin the arcs radiate from.
+    let dotR = max(2.0, size / 28.0)
+
     let dotGradient = CGGradient(
         colorsSpace: CGColorSpaceCreateDeviceRGB(),
         colors: [
-            CGColor(red: 0.6, green: 0.9, blue: 1.0, alpha: 1.0),
-            CGColor(red: 0.2, green: 0.6, blue: 1.0, alpha: 1.0),
+            CGColor(red: 0.72, green: 0.88, blue: 1.00, alpha: 1.0), // light blue
+            CGColor(red: 0.39, green: 0.71, blue: 1.00, alpha: 1.0), // (100,180,255)
         ] as CFArray,
         locations: [0, 1]
     )!
-    let dotRect = CGRect(x: cx - dotR, y: cy - dotR, width: dotR * 2, height: dotR * 2)
+
+    let dotRect = CGRect(x: sourceX - dotR, y: sourceY - dotR, width: dotR * 2, height: dotR * 2)
+    ctx.saveGState()
     ctx.addEllipse(in: dotRect)
     ctx.clip()
     ctx.drawRadialGradient(dotGradient,
-        startCenter: CGPoint(x: cx, y: cy + dotR * 0.3),
+        startCenter: CGPoint(x: sourceX, y: sourceY + dotR * 0.3),
         startRadius: 0,
-        endCenter:   CGPoint(x: cx, y: cy),
+        endCenter:   CGPoint(x: sourceX, y: sourceY),
         endRadius:   dotR,
         options: [])
+    ctx.restoreGState()
 
     img.unlockFocus()
     return img
 }
 
-// Write PNGs
+// ── Write PNGs ──────────────────────────────────────────────────────────────
+
 var pngPaths: [Int: String] = [:]
 for size in sizes {
     let img = drawIcon(size: CGFloat(size))
@@ -114,9 +126,8 @@ for size in sizes {
     pngPaths[size] = path
 }
 
-// Build iconset directory for iconutil — always start fresh so stale PNGs
-// from a previous run can't survive (FileManager.copyItem silently fails on
-// existing destinations, which would bake old art into the .icns).
+// ── Build .iconset and run iconutil ─────────────────────────────────────────
+
 let iconsetDir = "\(outDir)/AppIcon.iconset"
 try? FileManager.default.removeItem(atPath: iconsetDir)
 try? FileManager.default.createDirectory(atPath: iconsetDir, withIntermediateDirectories: true)
@@ -140,7 +151,6 @@ for entry in iconsetMap {
     try? FileManager.default.copyItem(atPath: src, toPath: dst)
 }
 
-// Run iconutil to produce .icns
 let proc = Process()
 proc.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
 proc.arguments = ["-c", "icns", iconsetDir, "-o", "\(outDir)/AppIcon.icns"]
