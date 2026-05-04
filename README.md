@@ -362,6 +362,17 @@ A large **p95 − p50 spread** with low average loss usually means bufferbloat: 
 
 ---
 
+## Related tools
+
+These apps are built by the same author and follow the same install pattern — build from source, no App Store, optional Claude companion plugin:
+
+| App | What it does |
+|-----|-------------|
+| [MacWatch](https://github.com/lswingrover/MacWatch) | Mac system health — CPU temps, memory pressure, battery health, process monitoring, composite health score |
+| [ClipWatch](https://github.com/lswingrover/ClipWatch) | Clipboard manager — searchable history, sensitive clip detection, Touch ID, hotkey panel |
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
