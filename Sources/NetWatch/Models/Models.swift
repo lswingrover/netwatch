@@ -296,6 +296,27 @@ struct MonitorSettings: Codable {
     /// Backup DNS servers used during failover.
     var remediationBackupDNS: [String] = ["9.9.9.9", "208.67.222.222"]
 
+    // MARK: Desktop Notifications (Sprint 1)
+
+    /// Master on/off switch for all desktop notification banners.
+    var desktopNotificationsEnabled: Bool = true
+
+    /// Fire a banner when NetWatch creates a new incident bundle.
+    var notifyOnIncident: Bool = true
+
+    /// Fire a banner when all ping targets fail (connectivity loss detected).
+    var notifyOnConnectivityLoss: Bool = true
+
+    /// Fire a banner when modem signal degrades (DS SNR, US Tx power thresholds crossed).
+    /// Default off — cable modem signal fluctuates frequently; enable only if you want granular alerts.
+    var notifyOnSignalDegradation: Bool = false
+
+    /// Fire a banner when the auto-remediation engine takes an action (e.g. DNS failover).
+    var notifyOnRemediation: Bool = true
+
+    /// Fire a banner when a new NetWatch version is available.
+    var notifyOnUpdateAvailable: Bool = true
+
     static let `default` = MonitorSettings()
 
     static func load() -> MonitorSettings {
@@ -364,6 +385,13 @@ extension MonitorSettings {
         // Sprint 9 (Mobile API) fields
         mobileAPIEnabled             = try c.decodeIfPresent(Bool.self,    forKey: .mobileAPIEnabled)             ?? false
         mobileAPIPort                = try c.decodeIfPresent(UInt16.self,  forKey: .mobileAPIPort)                ?? 57_821
+        // Sprint 1 (Desktop Notifications) fields
+        desktopNotificationsEnabled  = try c.decodeIfPresent(Bool.self,    forKey: .desktopNotificationsEnabled)  ?? true
+        notifyOnIncident             = try c.decodeIfPresent(Bool.self,    forKey: .notifyOnIncident)             ?? true
+        notifyOnConnectivityLoss     = try c.decodeIfPresent(Bool.self,    forKey: .notifyOnConnectivityLoss)     ?? true
+        notifyOnSignalDegradation    = try c.decodeIfPresent(Bool.self,    forKey: .notifyOnSignalDegradation)    ?? false
+        notifyOnRemediation          = try c.decodeIfPresent(Bool.self,    forKey: .notifyOnRemediation)          ?? true
+        notifyOnUpdateAvailable      = try c.decodeIfPresent(Bool.self,    forKey: .notifyOnUpdateAvailable)      ?? true
     }
 }
 

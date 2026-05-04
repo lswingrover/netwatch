@@ -1,5 +1,4 @@
 import Foundation
-import UserNotifications
 
 @MainActor
 class IncidentManager: ObservableObject {
@@ -15,6 +14,10 @@ class IncidentManager: ObservableObject {
         self.cooldown = cooldown
         loadExistingIncidents()
     }
+
+    /// Notification manager — injected by NetworkMonitorService.applySettings().
+    /// Replaces the unconditional UNNotification call that existed in bundleIncident().
+    var notificationManager: NetWatchNotificationManager?
 
     /// Call from NetworkMonitorService when failure thresholds are breached.
     /// `connectorSnapshots` is optional — pass whatever the ConnectorManager has at the moment.
@@ -187,15 +190,8 @@ class IncidentManager: ObservableObject {
         incidents.insert(incident, at: 0)
         if incidents.count > 200 { incidents.removeLast() }
 
-        // System notification
-        let content = UNMutableNotificationContent()
-        content.title = "NetWatch — \(reason)"
-        content.body  = subject
-        content.sound = .default
-        let req = UNNotificationRequest(
-            identifier: "netwatch-\(incident.id.uuidString)",
-            content: content, trigger: nil)
-        try? await UNUserNotificationCenter.current().add(req)
+        // Desktop notification — gated by NetWatchNotificationManager
+        notificationManager?.notifyIncident(reason: reason, subject: subject)
 
         // Webhook alert (fire-and-forget; errors logged to stderr)
         if !webhookURL.isEmpty {

@@ -16,11 +16,12 @@ class NetworkMonitorService: ObservableObject {
     let interfaceMonitor      = InterfaceMonitor(interval: 1.0)
     let tracerouteMonitor     = TracerouteMonitor(interval: 60.0)
     let connectorManager      = ConnectorManager()
-    let incidentManager:      IncidentManager
+    let incidentManager:        IncidentManager
     let bandwidthBudgetMonitor = BandwidthBudgetMonitor()
-    let speedTestMonitor:     SpeedTestMonitor
-    let remediationEngine     = RemediationEngine()
-    let apiServer             = NetWatchAPIServer()
+    let speedTestMonitor:       SpeedTestMonitor
+    let remediationEngine       = RemediationEngine()
+    let apiServer               = NetWatchAPIServer()
+    let notificationManager     = NetWatchNotificationManager()
 
     // MARK: - Private
 
@@ -111,6 +112,16 @@ class NetworkMonitorService: ObservableObject {
         remediationEngine.backupDNS        = settings.remediationBackupDNS
         remediationEngine.networkInterface = settings.networkInterface
         remediationEngine.cooldownSeconds  = settings.incidentCooldownSeconds
+
+        // Desktop notifications — configure manager, then inject into sub-monitors
+        notificationManager.isEnabled                = settings.desktopNotificationsEnabled
+        notificationManager.notifyOnIncident         = settings.notifyOnIncident
+        notificationManager.notifyOnConnectivityLoss = settings.notifyOnConnectivityLoss
+        notificationManager.notifyOnSignalDegradation = settings.notifyOnSignalDegradation
+        notificationManager.notifyOnRemediation      = settings.notifyOnRemediation
+        notificationManager.notifyOnUpdateAvailable  = settings.notifyOnUpdateAvailable
+        incidentManager.notificationManager          = notificationManager
+        remediationEngine.notificationManager        = notificationManager
 
         // Wire bandwidth budget check into the poll cycle
         let budgetMonitor = bandwidthBudgetMonitor

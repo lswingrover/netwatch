@@ -723,11 +723,91 @@ struct StorageTab: View {
 
 struct AlertingTab: View {
     @Binding var settings: MonitorSettings
+    @EnvironmentObject var notificationManager: NetWatchNotificationManager
     @State private var testResult: String = ""
     @State private var isTesting   = false
+    @State private var notifTestSent = false
 
     var body: some View {
         Form {
+            // ── Desktop Notifications ──────────────────────────────────────────
+            Section {
+                // Master switch
+                Toggle(isOn: $settings.desktopNotificationsEnabled) {
+                    Label {
+                        VStack(alignment: .leading) {
+                            Text("Desktop Notifications")
+                                .fontWeight(.medium)
+                            Text("Enable or disable all NetWatch notification banners.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "bell.fill")
+                            .foregroundStyle(.blue)
+                    }
+                }
+                .tint(.blue)
+
+                // Per-type toggles — greyed when master is off
+                Group {
+                    NotifTypeRow(
+                        label: "Incidents",
+                        subtitle: "When NetWatch creates an incident bundle",
+                        icon: "exclamationmark.triangle.fill",
+                        color: .orange,
+                        isOn: $settings.notifyOnIncident
+                    )
+                    NotifTypeRow(
+                        label: "Connectivity Loss",
+                        subtitle: "When all ping targets fail simultaneously",
+                        icon: "wifi.slash",
+                        color: .red,
+                        isOn: $settings.notifyOnConnectivityLoss
+                    )
+                    NotifTypeRow(
+                        label: "Signal Degradation",
+                        subtitle: "When modem DS SNR or US Tx power crosses a threshold",
+                        icon: "waveform.path.ecg",
+                        color: .yellow,
+                        isOn: $settings.notifyOnSignalDegradation
+                    )
+                    NotifTypeRow(
+                        label: "Auto-Remediation",
+                        subtitle: "When NetWatch takes a corrective action (e.g. DNS failover)",
+                        icon: "wand.and.stars",
+                        color: .green,
+                        isOn: $settings.notifyOnRemediation
+                    )
+                    NotifTypeRow(
+                        label: "Update Available",
+                        subtitle: "When a new NetWatch version is published on GitHub",
+                        icon: "arrow.down.circle",
+                        color: .blue,
+                        isOn: $settings.notifyOnUpdateAvailable
+                    )
+
+                    HStack {
+                        Button(notifTestSent ? "Notification sent ✓" : "Send Test Notification") {
+                            notificationManager.sendTest()
+                            notifTestSent = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                                notifTestSent = false
+                            }
+                        }
+                        .disabled(!settings.desktopNotificationsEnabled)
+                        Spacer()
+                    }
+                }
+                .opacity(settings.desktopNotificationsEnabled ? 1.0 : 0.4)
+                .disabled(!settings.desktopNotificationsEnabled)
+            } header: {
+                Text("Desktop Notifications")
+            } footer: {
+                Text("Notification settings take effect after pressing Apply & Restart. Signal Degradation is off by default — cable modem signal fluctuates frequently.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             // ── Webhook ────────────────────────────────────────────────────────
             Section {
                 LabeledContent("Webhook URL") {
@@ -921,5 +1001,31 @@ struct AlertingTab: View {
         )
         isTesting  = false
         testResult = "✓ Sent (check your webhook endpoint)"
+    }
+}
+
+// MARK: - NotifTypeRow helper
+
+private struct NotifTypeRow: View {
+    let label:    String
+    let subtitle: String
+    let icon:     String
+    let color:    Color
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .foregroundStyle(color)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(label)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }

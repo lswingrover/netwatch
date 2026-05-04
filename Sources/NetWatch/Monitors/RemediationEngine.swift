@@ -60,6 +60,9 @@ final class RemediationEngine: ObservableObject {
 
     // MARK: - Config (injected from NetworkMonitorService.applySettings)
 
+    /// Notification manager — injected by NetworkMonitorService.applySettings().
+    var notificationManager: NetWatchNotificationManager?
+
     var isEnabled           = false
     var failThreshold: Int  = 3        // consecutive failures before triggering
     var recoverThreshold    = 5        // consecutive successes before restoring
@@ -195,6 +198,8 @@ final class RemediationEngine: ObservableObject {
         events.append(event)
         // Keep last 200 events
         if events.count > 200 { events = Array(events.suffix(200)) }
+        // Desktop notification — gated by NetWatchNotificationManager
+        notificationManager?.notifyRemediation(action: detail, kind: kind, success: success)
     }
 
     /// Synchronous shell helper — runs on a background thread.

@@ -20,9 +20,11 @@ struct NetWatchApp: App {
                 .onAppear {
                     registerConnectors()
                     monitor.start()
+                    // Inject notification manager into UpdateChecker before starting
+                    updateChecker.notificationManager = monitor.notificationManager
                     updateChecker.start()
-                    UNUserNotificationCenter.current()
-                        .requestAuthorization(options: [.alert, .sound]) { _, _ in }
+                    // Request notification permission via the owned manager
+                    monitor.notificationManager.requestPermission()
                 }
                 .onDisappear {
                     monitor.stop()
@@ -84,7 +86,8 @@ struct NetWatchApp: App {
         Settings {
             PreferencesView()
                 .environmentObject(monitor)
-                .frame(width: 600, height: 520)
+                .environmentObject(monitor.notificationManager)
+                .frame(width: 600, height: 560)
         }
 
         MenuBarExtra {

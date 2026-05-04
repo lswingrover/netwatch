@@ -2,12 +2,15 @@ import Foundation
 import UserNotifications
 
 /// Polls the GitHub Releases API for a newer version of NetWatch.
-/// On discovery, fires a system notification and publishes `updateAvailable`.
+/// On discovery, fires a desktop notification via NetWatchNotificationManager (gated by settings).
 @MainActor
 class UpdateChecker: ObservableObject {
     @Published var latestVersion: String = ""
     @Published var updateAvailable: Bool = false
     @Published var releaseURL: URL?
+
+    /// Injected by NetWatchApp.onAppear — routes update notifications through the gated manager.
+    var notificationManager: NetWatchNotificationManager?
 
     private let repoAPI = URL(string: "https://api.github.com/repos/lswingrover/netwatch/releases/latest")!
     private var timer: Timer?
@@ -60,7 +63,12 @@ class UpdateChecker: ObservableObject {
         latestVersion = remoteVersion
         releaseURL    = htmlURL
         updateAvailable = true
-        await postNotification(version: remoteVersion, url: htmlURL)
+        // Route through gated notification manager; fall back to direct banner if not injected
+        if let nm = notificationManager {
+            nm.notifyUpdateAvailable(version: remoteVersion)
+        } else {
+            await postFallbackNotification(version: remoteVersion, url: htmlURL)
+        }
     }
 
     /// Returns true if `remote` is strictly greater than `local` using semver integer comparison.
@@ -78,10 +86,11 @@ class UpdateChecker: ObservableObject {
         return false
     }
 
-    private func postNotification(version: String, url: URL?) async {
+    /// Fallback direct notification (used when notificationManager is not yet injected).
+    private func postFallbackNotification(version: String, url: URL?) async {
         let content = UNMutableNotificationContent()
         content.title    = "NetWatch \(version) is available"
-        content.body     = "A new version of NetWatch is available on GitHub. Open the release page to download."
+        content.body     = "A new version of NetWatch is available on GitHub."
         content.sound    = .default
         if let url = url {
             content.userInfo = ["releaseURL": url.absoluteString]
