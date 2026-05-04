@@ -40,9 +40,18 @@ struct NetWatchApp: App {
                     NSApp.orderFrontStandardAboutPanel(options: [
                         .applicationName: "NetWatch",
                         .applicationVersion: "1.3.1",
-                        .credits: NSAttributedString(string: "Network monitoring dashboard.\nBuilt by Louis Swingrover.")
+                        .credits: NSAttributedString(string: "Network monitoring dashboard.\nBuilt by Louis Swingrover.\nhttps://github.com/lswingrover/NetWatch")
                     ])
                 }
+            }
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    updateChecker.checkNow()
+                }
+                Button("View on GitHub") {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/lswingrover/NetWatch")!)
+                }
+                Divider()
             }
             CommandMenu("Monitor") {
                 Button(monitor.isRunning ? "Pause Monitoring" : "Resume Monitoring") {
@@ -87,6 +96,7 @@ struct NetWatchApp: App {
             PreferencesView()
                 .environmentObject(monitor)
                 .environmentObject(monitor.notificationManager)
+                .environmentObject(updateChecker)
                 .frame(width: 600, height: 560)
         }
 
@@ -95,6 +105,7 @@ struct NetWatchApp: App {
                 .environmentObject(monitor)
                 .environmentObject(monitor.interfaceMonitor)
                 .environmentObject(monitor.speedTestMonitor)
+                .environmentObject(updateChecker)
         } label: {
             Image(systemName: monitor.overallStatus.systemImage)
                 .foregroundStyle(

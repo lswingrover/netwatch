@@ -5,6 +5,7 @@ struct MenuBarStatusView: View {
     @EnvironmentObject var monitor:          NetworkMonitorService
     @EnvironmentObject var ifm:              InterfaceMonitor
     @EnvironmentObject var speedTestMonitor: SpeedTestMonitor
+    @EnvironmentObject var updateChecker:    UpdateChecker
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -91,6 +92,23 @@ struct MenuBarStatusView: View {
                 }
             }
 
+            // ── Update available ───────────────────────────────────────────────
+            if updateChecker.updateAvailable, let url = updateChecker.releaseURL {
+                Divider()
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .foregroundStyle(.accentColor)
+                        .font(.caption)
+                    Text("v\(updateChecker.latestVersion) available")
+                        .font(.caption).foregroundStyle(.accentColor)
+                    Spacer()
+                    Button("Update") { NSWorkspace.shared.open(url) }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .foregroundStyle(.accentColor)
+                }
+            }
+
             // ── Actions ────────────────────────────────────────────────────────
             Divider()
             HStack {
@@ -99,6 +117,13 @@ struct MenuBarStatusView: View {
                 }
                 .buttonStyle(.borderless)
                 .font(.caption)
+                Spacer()
+                Button("GitHub") {
+                    NSWorkspace.shared.open(URL(string: "https://github.com/lswingrover/NetWatch")!)
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 Spacer()
                 Button("Open NetWatch") {
                     NSApp.activate(ignoringOtherApps: true)

@@ -34,12 +34,38 @@ struct ContentView: View {
     @EnvironmentObject var monitor:          NetworkMonitorService
     @EnvironmentObject var ifMonitor:        InterfaceMonitor
     @EnvironmentObject var connectorManager: ConnectorManager
+    @EnvironmentObject var updateChecker:    UpdateChecker
     @State private var selection:           NavItem = .overview
     @State private var showPalette:         Bool    = false
+    @State private var updateBannerDismissed = false
     /// Set by topology node taps to deep-link into a specific connector in ConnectorsView.
     @State private var pendingConnectorID:  String? = nil
 
     var body: some View {
+        VStack(spacing: 0) {
+            // ── Update banner ─────────────────────────────────────────────────
+            if updateChecker.updateAvailable && !updateBannerDismissed {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.down.circle.fill")
+                    Text("NetWatch \(updateChecker.latestVersion) is available")
+                        .font(.subheadline).fontWeight(.medium)
+                    Spacer()
+                    if let url = updateChecker.releaseURL {
+                        Button("View Release") { NSWorkspace.shared.open(url) }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    }
+                    Button { withAnimation { updateBannerDismissed = true } } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color.accentColor.opacity(0.15))
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
         NavigationSplitView {
             List(NavItem.allCases, selection: $selection) { item in
                 Label(item.rawValue, systemImage: item.systemImage)
@@ -98,6 +124,7 @@ struct ContentView: View {
                     .environmentObject(monitor)
             }
         }
+        } // VStack
     }
 }
 

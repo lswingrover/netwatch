@@ -2,7 +2,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct PreferencesView: View {
-    @EnvironmentObject var monitor: NetworkMonitorService
+    @EnvironmentObject var monitor:       NetworkMonitorService
+    @EnvironmentObject var updateChecker: UpdateChecker
     @State private var settings: MonitorSettings = .default
     @State private var newPingHost: String = ""
     @State private var newDNSDomain: String = ""
@@ -25,6 +26,10 @@ struct PreferencesView: View {
 
             AlertingTab(settings: $settings)
                 .tabItem { Label("Alerting", systemImage: "bell.badge") }
+
+            AboutTab()
+                .environmentObject(updateChecker)
+                .tabItem { Label("About", systemImage: "info.circle") }
         }
         .onAppear { settings = monitor.settings }
         .safeAreaInset(edge: .bottom) {
@@ -1028,4 +1033,72 @@ private struct NotifTypeRow: View {
             }
         }
     }
+}
+
+// MARK: - About Tab
+
+private struct AboutTab: View {
+    @EnvironmentObject var updateChecker: UpdateChecker
+
+    private let githubURL   = URL(string: "https://github.com/lswingrover/NetWatch")!
+    private let releasesURL = URL(string: "https://github.com/lswingrover/NetWatch/releases")!
+
+    var body: some View {
+        Form {
+            Section {
+                HStack(spacing: 14) {
+                    Image(systemName: "network")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.accentColor)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("NetWatch")
+                            .font(.title2).fontWeight(.semibold)
+                        Text("Version \(updateChecker.currentVersion)")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 6)
+            }
+
+            Section("Updates") {
+                if updateChecker.updateAvailable {
+                    HStack {
+                        Label("Version \(updateChecker.latestVersion) available",
+                              systemImage: "arrow.down.circle.fill")
+                            .foregroundStyle(.accentColor)
+                        Spacer()
+                        if let url = updateChecker.releaseURL {
+                            Button("View Release") { NSWorkspace.shared.open(url) }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                        }
+                    }
+                } else {
+                    Label("NetWatch is up to date", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                Button("Check for Updates Now") { updateChecker.checkNow() }
+                    .buttonStyle(.borderless)
+            }
+
+            Section("GitHub") {
+                Button {
+                    NSWorkspace.shared.open(githubURL)
+                } label: {
+                    Label("View Repository", systemImage: "safari")
+                }
+                .buttonStyle(.borderless)
+
+                Button {
+                    NSWorkspace.shared.open(releasesURL)
+                } label: {
+                    Label("All Releases", systemImage: "list.bullet.clipboard")
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
 }
