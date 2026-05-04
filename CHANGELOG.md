@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — Sprint 10 + fixes
 
+### Fixed
+- **Speed test history not persisting across restarts** — `SpeedTestMonitor.loadHistory()` constructed `persistenceURL` through an unresolved symlink on `~/network_tests`, causing `data.write(to:)` to fail silently. Fixed by calling `.resolvingSymlinksInPath()` before constructing subpaths — same fix previously applied to `IncidentManager.bundleIncident()`.
+
 ### Added
 - **ClaudeCompanionCard** — shared reusable component (`ClaudeCompanionCard` full card + `ClaudeCompanionButton` compact header variant); copies a formatted network-context prompt to clipboard and deep-links to `claude://` with `https://claude.ai/new` fallback
 - **Firewalla Overview — Security Interpretation section** — always-shown context cards explaining WAN status, alarm classification (critical / warning / info / clean), blocked request scale (< 50 / 50–500 / 500–5000 / 5000+), VPN tunnel state, and device density; `FWContextCard` sub-component

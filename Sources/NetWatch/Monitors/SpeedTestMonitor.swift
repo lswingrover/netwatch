@@ -337,13 +337,17 @@ final class SpeedTestMonitor: ObservableObject {
     // MARK: - Persistence
 
     private func loadHistory(baseDirectory: String) {
-        let base = (baseDirectory as NSString).expandingTildeInPath
-        let dir  = URL(fileURLWithPath: base).appendingPathComponent("speed_tests")
+        let base    = (baseDirectory as NSString).expandingTildeInPath
+        // Resolve any symlink before constructing paths — `String.write(to:atomically:true)` and
+        // `FileManager.createDirectory` fail silently when the destination passes through a symlink
+        // (same fix applied to IncidentManager). `resolvingSymlinksInPath()` follows the chain.
+        let rawDir  = URL(fileURLWithPath: base).appendingPathComponent("speed_tests")
+        let dir     = rawDir.resolvingSymlinksInPath()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("history.json")
         persistenceURL = url
-        guard let data     = try? Data(contentsOf: url),
-              let loaded   = try? JSONDecoder().decode([SpeedTestResult].self, from: data)
+        guard let data   = try? Data(contentsOf: url),
+              let loaded = try? JSONDecoder().decode([SpeedTestResult].self, from: data)
         else { return }
         history    = Array(loaded.prefix(maxHistory))
         lastResult = history.first
