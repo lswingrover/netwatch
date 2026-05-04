@@ -257,8 +257,8 @@ You do **not** need a paid Apple Developer account. You do **not** need Xcode it
 ### Build & Install
 
 ```bash
-git clone https://github.com/lswingrover/netwatch.git
-cd netwatch
+git clone https://github.com/lswingrover/NetWatch.git ~/Developer/NetWatch
+cd ~/Developer/NetWatch
 bash build_app.sh
 ```
 
