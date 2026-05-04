@@ -150,28 +150,37 @@ See `Sources/NetWatch/Connectors/ConnectorProtocol.swift` for the full protocol 
 
 ---
 
-## NetWatch Diagnose — Claude skill
+## NetWatch Claude Companion Plugin
 
-A companion skill that uses Claude to diagnose network problems from your incident bundles and live connector data.
+NetWatch includes a Claude plugin that lets Claude read your incident bundles and connector data to diagnose network problems in plain English.
 
+**What it does:** when you run a NetWatch skill in Claude, it reads your most recent incident bundle, correlates connector data (Firewalla alarms, Nighthawk uptime/WAN IP), runs a root-cause chain analysis (WAN outage vs. router issue vs. DNS failure vs. local blip), and delivers a plain-English diagnosis with recommended next steps — including a pre-filled ISP escalation draft.
+
+**Try it:** *"Diagnose my last network outage using NetWatch"* or *"What should I tell Comcast?"*
+
+### Install the plugin
+
+**Step 1 — Open the Claude desktop app.**
+
+**Step 2 — Go to Settings.**
+Click the gear icon, then choose **Capabilities → Customize**.
+
+**Step 3 — Add the NetWatch plugin.**
+Under **Plugins**, click the **+** button. Navigate to:
 ```
-skill/SKILL.md       Claude skill instructions — the diagnostic logic
-skill/README.md      Installation guide
+~/Developer/NetWatch/plugin/netwatch-companion.plugin
 ```
+Select it and click **Open**.
 
-**What it does:** when you run the skill in Claude, it reads your most recent incident bundle, correlates connector data (Firewalla alarms, Nighthawk uptime/WAN IP), runs a root-cause chain analysis (WAN outage vs. router issue vs. DNS failure vs. local blip), and delivers a plain-English diagnosis with recommended next steps — including a pre-filled ISP escalation draft.
+**Step 4 — Restart Claude** if prompted.
 
-**Install:**
+The plugin is active. In any Claude session, just describe your problem and Claude will use the NetWatch skills automatically.
 
-```bash
-# Copy to your Claude skills folder
-mkdir -p ~/Documents/Claude/skills/netwatch-diagnose
-cp skill/SKILL.md ~/Documents/Claude/skills/netwatch-diagnose/SKILL.md
-```
+### Skills included
 
-Then in any Claude session: *"Run the netwatch-diagnose skill"* or *"Diagnose my last network outage using NetWatch."*
-
-See `skill/README.md` for detailed installation options (Cowork plugin, manual, API).
+| Skill | Trigger phrase | What Claude does |
+|-------|---------------|-----------------|
+| **netwatch-diagnose** | *"Diagnose my network"* or *"What happened to my internet?"* | Reads your most recent incident bundle, correlates Firewalla/Nighthawk connector data, identifies root cause, produces ISP escalation draft |
 
 ---
 
